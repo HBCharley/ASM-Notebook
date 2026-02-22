@@ -25,6 +25,7 @@ env/
 Thumbs.db
 .vscode/
 .idea/
+.continue/
 
 # ===== Project outputs / data =====
 # Local SQLite DB (scan state)
