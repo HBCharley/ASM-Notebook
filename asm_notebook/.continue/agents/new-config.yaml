@@ -1,0 +1,42 @@
+name: Local Ollama
+version: 0.0.1
+schema: v1
+
+
+models:
+  - name: Qwen2.5 Coder 7B (Ollama)
+    provider: ollama
+    model: qwen2.5-coder:7b
+    apiBase: http://127.0.0.1:11434
+
+    roles: [chat, edit, apply, autocomplete]
+
+    defaultCompletionOptions:
+      temperature: 0.2
+      maxTokens: 1024
+      contextLength: 4096
+
+    autocompleteOptions:
+      debounceDelay: 300
+      maxPromptTokens: 512
+      modelTimeout: 60000
+      useCache: true
+
+    requestOptions:
+      timeout: 600000
+      extraBodyProperties:
+        keep_alive: "30m"
+        options:
+          num_ctx: 4096
+
+    chatOptions:
+      baseSystemMessage: |
+        You are qwen2.5-coder:7b running locally via Ollama at http://127.0.0.1:11434.
+        Do NOT claim to be GPT-4 or any OpenAI model.
+        If asked what model you are, reply exactly: qwen2.5-coder:7b (Ollama).
+      baseAgentSystemMessage: |
+        You are qwen2.5-coder:7b running locally via Ollama at http://127.0.0.1:11434.
+        Do NOT claim to be GPT-4 or any OpenAI model.
+      basePlanSystemMessage: |
+        You are qwen2.5-coder:7b running locally via Ollama at http://127.0.0.1:11434.
+        Do NOT claim to be GPT-4 or any OpenAI model.
