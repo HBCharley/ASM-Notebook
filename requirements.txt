@@ -1,0 +1,8 @@
+fastapi
+typer
+sqlalchemy
+pydantic
+httpx
+dnspython
+rich
+uvicorn
