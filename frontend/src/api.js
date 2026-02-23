@@ -12,9 +12,20 @@ async function request(path, options = {}) {
     return null;
   }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = null;
+    }
+  }
   if (!res.ok) {
-    const detail = data && data.detail ? data.detail : res.statusText;
+    const detail =
+      (data && data.detail) ||
+      (text && !data ? text : null) ||
+      res.statusText ||
+      "Request failed";
     throw new Error(detail);
   }
   return data;

@@ -115,7 +115,7 @@ def update_company(slug: str, payload: CompanyUpdate):
 
 @app.put("/companies/{slug}/domains")
 def replace_domains(slug: str, payload: DomainReplace):
-    domains = [d.strip().lower().strip(".") for d in payload.domains]
+    domains = list(dict.fromkeys([d.strip().lower().strip(".") for d in payload.domains if d and d.strip()]))
     if not domains:
         raise HTTPException(status_code=400, detail="domains must not be empty")
 
@@ -126,6 +126,8 @@ def replace_domains(slug: str, payload: DomainReplace):
 
         for d in list(c.domains):
             s.delete(d)
+        # Ensure deletes are issued before inserts to avoid unique constraint conflicts.
+        s.flush()
         for d in domains:
             s.add(CompanyDomain(company_id=c.id, domain=d))
         s.commit()

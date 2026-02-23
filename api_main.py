@@ -154,7 +154,7 @@ def update_company(slug: str, payload: CompanyUpdate) -> Dict[str, Any]:
 
 @app.put("/companies/{slug}/domains")
 def replace_domains(slug: str, payload: DomainReplace) -> Dict[str, Any]:
-    domains = [_normalize_domain(d) for d in payload.domains if d and d.strip()]
+    domains = list(dict.fromkeys([_normalize_domain(d) for d in payload.domains if d and d.strip()]))
     if not domains:
         raise HTTPException(status_code=400, detail="domains must not be empty")
 
@@ -166,6 +166,8 @@ def replace_domains(slug: str, payload: DomainReplace) -> Dict[str, Any]:
         # Remove existing domains
         for d in list(c.domains):
             s.delete(d)
+        # Flush deletions before re-inserting to satisfy unique(company_id, domain).
+        s.flush()
 
         # Add new domains
         for d in domains:
