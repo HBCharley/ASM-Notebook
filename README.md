@@ -1,21 +1,44 @@
-# ASM Notebook (Passive)
+# ASM Notebook
 
-A small, **passive-only** Attack Surface Management (ASM) notebook you can run from the CLI.  
-It stores results per company and keeps scan history in SQLite for later review/export.
+ASM Notebook is a passive, multi-company Attack Surface Management (ASM) backend.
+It performs non-intrusive OSINT-based asset discovery (Certificate Transparency + passive DNS)
+and stores structured historical scan data per company.
 
----
+This project intentionally avoids invasive probing and focuses on publicly available signals only.
 
-## What it does (today)
+## Stack
 
-- Multi-company inventory (slug + name + root domain(s))
-- Passive subdomain discovery via Certificate Transparency (crt.sh) with scope filtering
-- DNS enrichment (A / AAAA / CNAME / MX / NS)
-- Stores scan results + artifacts in SQLite
-- Exports structured JSON for reporting or downstream analysis
+- Python 3.13
+- FastAPI API
+- Typer CLI
+- SQLAlchemy ORM
+- SQLite (`asm_notebook.sqlite3`)
+- Poetry for dependency management
+- Uvicorn for development server
 
-> This project intentionally avoids invasive probing and focuses on publicly available signals only.
+## Core Principles
 
----
+- Passive-only discovery (no active scanning)
+- Multi-company isolation
+- Historical scan tracking
+- Local-first architecture
+- Structured JSON artifacts
+- Hardened company-scoped access
+
+## Data Model
+
+- `Company`
+- `CompanyDomain`
+- `ScanRun`
+- `ScanArtifact`
+
+`ScanRun` includes a per-company scan number:
+
+- `id` (global primary key)
+- `company_id` (FK)
+- `company_scan_number` (increments per company)
+
+There is a unique constraint on `(company_id, company_scan_number)` for stable per-company numbering.
 
 ## Requirements
 
@@ -23,74 +46,122 @@ It stores results per company and keeps scan history in SQLite for later review/
 - Poetry
 - Network access (for crt.sh + DNS resolution)
 
----
-
 ## Install
 
 ```powershell
-# From repo root
 poetry install
 ```
 
----
+## Run the API
 
-## CLI Usage
+```powershell
+poetry run uvicorn asm_notebook.api_main:app --reload
+```
 
-Show help:
+Health check:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/health"
+```
+
+## CLI
 
 ```powershell
 poetry run python -m asm_notebook.cli --help
 ```
 
-### Companies
-
-Add a company (use domains you own or have authorization for):
+Examples:
 
 ```powershell
-poetry run python -m asm_notebook.cli company add myco "My Company" --domain example.com
+# Add a company
+poetry run python -m asm_notebook.cli company add testco "Test Co" --domain example.com
+
+# Update domains
+poetry run python -m asm_notebook.cli company set-domain testco --domain example.com --domain example.org
+
+# Run a scan
+poetry run python -m asm_notebook.cli scan run testco
+
+# List scans
+poetry run python -m asm_notebook.cli scan list testco
+
+# Export a scan to JSON
+poetry run python -m asm_notebook.cli scan export 1 --out-json out.json
+
+# Delete a scan (scoped to company)
+poetry run python -m asm_notebook.cli scan delete testco 1
+
+# Delete a company (and all scans/artifacts)
+poetry run python -m asm_notebook.cli company delete testco --yes
 ```
 
-List companies:
+## API Endpoints
+
+Health:
+
+- `GET /health`
+
+Companies:
+
+- `POST /companies`
+- `GET /companies`
+- `PUT /companies/{slug}/domains`
+- `DELETE /companies/{slug}`
+
+Scans (company-scoped and hardened):
+
+- `POST /companies/{slug}/scans`
+- `GET /companies/{slug}/scans`
+- `GET /companies/{slug}/scans/{scan_id}`
+- `GET /companies/{slug}/scans/{scan_id}/artifacts`
+- `GET /companies/{slug}/scans/by-number/{company_scan_number}`
+- `DELETE /companies/{slug}/scans/{scan_id}`
+
+### API Examples
+
+Create a company:
 
 ```powershell
-poetry run python -m asm_notebook.cli company list
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/companies" -ContentType "application/json" -Body '{
+  "slug": "deepgram",
+  "name": "Deepgram",
+  "domains": ["deepgram.com"]
+}'
 ```
 
-Show company details:
+Trigger a scan:
 
 ```powershell
-poetry run python -m asm_notebook.cli company show myco
-```
-
-Update domains (replace existing domains):
-
-```powershell
-poetry run python -m asm_notebook.cli company set-domain myco --domain example.com
-```
-
----
-
-### Scans
-
-Run a passive scan:
-
-```powershell
-poetry run python -m asm_notebook.cli scan run myco
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/companies/deepgram/scans"
 ```
 
 List scans:
 
 ```powershell
-poetry run python -m asm_notebook.cli scan list myco
+Invoke-RestMethod "http://127.0.0.1:8000/companies/deepgram/scans" | ConvertTo-Json -Depth 5
 ```
 
-Export a scan to JSON:
+Fetch artifacts:
 
 ```powershell
-poetry run python -m asm_notebook.cli scan export 4 --out-json scan4.json
+Invoke-RestMethod "http://127.0.0.1:8000/companies/deepgram/scans/1/artifacts" | ConvertTo-Json -Depth 8
 ```
 
----
+Fetch by per-company scan number:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/companies/deepgram/scans/by-number/1"
+```
+
+## Scan Execution Flow
+
+1. Collect subdomains via Certificate Transparency (`crt.sh`).
+2. Scope-filter against root domains.
+3. Perform passive DNS resolution (A/AAAA/CNAME/MX/NS).
+4. Persist artifacts:
+   - `domains`
+   - `dns`
+5. Update `ScanRun` status and timestamps.
 
 ## Data & Storage
 
@@ -98,27 +169,26 @@ poetry run python -m asm_notebook.cli scan export 4 --out-json scan4.json
 - Scan artifacts are stored as JSON in the database and can be exported via `scan export`.
 - The database file is intentionally excluded from Git.
 
----
+## Notes on SQLite Migration
 
-## Roadmap (Planned)
+If you created `asm_notebook.sqlite3` before the `company_scan_number` column existed,
+run a migration to add it and backfill per company. The required steps are:
 
-- FastAPI backend (REST API for companies, scans, artifacts, and scan execution)
-- React frontend (browser UI for inventory + scan history + artifact views)
-- Optional passive integrations (Shodan / Censys APIs)
-- Scan diffing ("new assets detected")
-- Docker packaging for reproducible demo/deploy
+1. Add the column to `scan_runs`.
+2. Backfill numbers per company in `id` order.
+3. Add a unique index on `(company_id, company_scan_number)`.
 
----
+If you want a scripted migration, ask and it can be provided.
+
+## Known Gaps
+
+- No service layer yet (scan logic is in the API/CLI).
+- No Alembic migrations.
+- No deterministic test mode (external CT/DNS required).
+- No background task queue (scan runs synchronously).
+- No frontend yet.
 
 ## Safety / Scope
 
 This repository is intended for authorized security assessment and learning.
-
-Even passive reconnaissance can be sensitive.  
 Only analyze domains you own or have explicit permission to assess.
-
----
-
-## License
-
-MIT (see `LICENSE`).
