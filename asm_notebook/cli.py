@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime, timezone
 
 import typer
 from rich import print
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .init_db import init_db
 from .db import SessionLocal
@@ -102,6 +103,10 @@ def _in_scope(domain: str, roots: set[str]) -> bool:
             return True
     return False
 
+
+def _test_mode() -> bool:
+    return os.getenv("ASM_TEST_MODE", "").strip() == "1"
+
 @scan_app.command("run")
 def scan_run(company_slug: str):
     """Run passive scan (CT + DNS) and store results."""
@@ -113,14 +118,47 @@ def scan_run(company_slug: str):
         if not roots:
             raise typer.BadParameter("Company has no domains.")
 
-        scan = ScanRun(company_id=company.id, status="running", started_at=datetime.now(timezone.utc))
+        last_num = (
+            s.execute(
+                select(func.max(ScanRun.company_scan_number)).where(ScanRun.company_id == company.id)
+            )
+            .scalar_one()
+        )
+        next_num = (last_num or 0) + 1
+
+        scan = ScanRun(
+            company_id=company.id,
+            company_scan_number=next_num,
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
         s.add(scan)
         s.commit()
         s.refresh(scan)
         scan_id = scan.id
 
     async def _run():
-        # 1) CT
+        if _test_mode():
+            domains_sorted = sorted(roots)
+            dns_records = [
+                {
+                    "domain": d,
+                    "resolved_at": datetime.now(timezone.utc).isoformat(),
+                    "A": [],
+                    "AAAA": [],
+                    "CNAME": [],
+                    "MX": [],
+                    "NS": [],
+                    "TXT": [],
+                    "SOA": [],
+                    "CAA": [],
+                    "ips": [],
+                    "PTR": {},
+                }
+                for d in domains_sorted
+            ]
+            return domains_sorted, dns_records
+
         all_domains: set[str] = set(roots)
         for root in roots:
             subs = await ct_subdomains(root)
@@ -128,7 +166,6 @@ def scan_run(company_slug: str):
         all_domains = {d for d in all_domains if _in_scope(d, roots)}
         domains_sorted = sorted(all_domains)
 
-        # 2) DNS (bounded concurrency)
         sem = asyncio.Semaphore(25)
 
         async def dns_task(d: str):
@@ -165,7 +202,7 @@ def scan_run(company_slug: str):
             scan.completed_at = datetime.now(timezone.utc)
             s.commit()
 
-        print(f"[green]Scan complete[/green] scan_id={scan_id}")
+        print(f"[green]Scan complete[/green] scan_id={scan_id} company_scan_number={next_num}")
 
     except Exception as e:
         with SessionLocal() as s:
@@ -192,7 +229,10 @@ def scan_list(company_slug: str):
         return
 
     for sc in scans:
-        print(f"- id={sc.id} status={sc.status} started={sc.started_at} completed={sc.completed_at} notes={sc.notes}")
+        print(
+            f"- id={sc.id} company_scan_number={sc.company_scan_number} status={sc.status} "
+            f"started={sc.started_at} completed={sc.completed_at} notes={sc.notes}"
+        )
 
 @scan_app.command("export")
 def scan_export(scan_id: int, out_json: str = "out.json"):
@@ -209,6 +249,7 @@ def scan_export(scan_id: int, out_json: str = "out.json"):
         "company": {"slug": company.slug, "name": company.name} if company else None,
         "scan": {
             "id": scan.id,
+            "company_scan_number": scan.company_scan_number,
             "status": scan.status,
             "started_at": str(scan.started_at),
             "completed_at": str(scan.completed_at),

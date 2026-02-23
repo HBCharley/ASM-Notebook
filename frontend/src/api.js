@@ -1,9 +1,16 @@
 const BASE = import.meta.env.VITE_API_BASE || "";
+const BASIC_USER = import.meta.env.VITE_BASIC_AUTH_USER || "";
+const BASIC_PASS = import.meta.env.VITE_BASIC_AUTH_PASS || "";
+const BASIC_AUTH_HEADER =
+  BASIC_USER || BASIC_PASS
+    ? `Basic ${btoa(`${BASIC_USER}:${BASIC_PASS}`)}`
+    : "";
 
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: {
       "Content-Type": "application/json",
+      ...(BASIC_AUTH_HEADER ? { Authorization: BASIC_AUTH_HEADER } : {}),
       ...(options.headers || {}),
     },
     ...options,

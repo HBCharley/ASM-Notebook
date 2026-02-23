@@ -27,9 +27,13 @@ class CompanyDomain(Base):
 
 class ScanRun(Base):
     __tablename__ = "scan_runs"
+    __table_args__ = (
+        UniqueConstraint("company_id", "company_scan_number", name="uq_company_scan_number"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    company_scan_number: Mapped[int] = mapped_column(Integer, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="running")  # running/success/failed
