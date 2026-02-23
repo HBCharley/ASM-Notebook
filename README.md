@@ -17,6 +17,11 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Uvicorn for development server
 - React + Vite frontend (`frontend/`)
 
+## Project Layout
+
+- Canonical backend implementation lives in `asm_notebook/`.
+- Root-level files (`api_main.py`, `models.py`, `db.py`, `init_db.py`, `cli.py`) are compatibility shims that re-export from `asm_notebook/*`.
+
 ## Core Principles
 
 - Passive-only discovery (no active scanning)

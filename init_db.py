@@ -1,5 +1,3 @@
-from .db import ENGINE, Base
-from . import models  # noqa: F401
+from asm_notebook.init_db import init_db
 
-def init_db():
-    Base.metadata.create_all(bind=ENGINE)
+__all__ = ["init_db"]
