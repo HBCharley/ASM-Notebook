@@ -13,8 +13,9 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Typer CLI
 - SQLAlchemy ORM
 - SQLite (`asm_notebook.sqlite3`)
-- Poetry for dependency management
+- Poetry or pip/venv for dependency management
 - Uvicorn for development server
+- React + Vite frontend (`frontend/`)
 
 ## Core Principles
 
@@ -43,19 +44,36 @@ There is a unique constraint on `(company_id, company_scan_number)` for stable p
 ## Requirements
 
 - Python 3.13+
-- Poetry
+- Poetry (optional) or pip + venv
+- Node.js 18+
 - Network access (for crt.sh + DNS resolution)
 
-## Install
+## Install (Poetry)
 
 ```powershell
 poetry install
 ```
 
-## Run the API
+## Install (pip + venv)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pip install "uvicorn[standard]"
+```
+
+## Run the API (Poetry)
 
 ```powershell
 poetry run uvicorn asm_notebook.api_main:app --reload
+```
+
+## Run the API (pip + venv)
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Health check:
@@ -63,6 +81,23 @@ Health check:
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:8000/health"
 ```
+
+## Frontend
+
+```powershell
+cd frontend
+npm install
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Open:
+
+- `http://127.0.0.1:5173/`
+
+Notes:
+
+- The frontend uses a Vite proxy to the backend for API routes (`/companies`, `/scan`, `/health`).
+- Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
 
 ## CLI
 
@@ -105,13 +140,16 @@ Companies:
 
 - `POST /companies`
 - `GET /companies`
+- `GET /companies/{slug}`
 - `PUT /companies/{slug}/domains`
+- `PATCH /companies/{slug}`
 - `DELETE /companies/{slug}`
 
 Scans (company-scoped and hardened):
 
 - `POST /companies/{slug}/scans`
 - `GET /companies/{slug}/scans`
+- `GET /companies/{slug}/scans/latest`
 - `GET /companies/{slug}/scans/{scan_id}`
 - `GET /companies/{slug}/scans/{scan_id}/artifacts`
 - `GET /companies/{slug}/scans/by-number/{company_scan_number}`
@@ -186,7 +224,6 @@ If you want a scripted migration, ask and it can be provided.
 - No Alembic migrations.
 - No deterministic test mode (external CT/DNS required).
 - No background task queue (scan runs synchronously).
-- No frontend yet.
 
 ## Safety / Scope
 

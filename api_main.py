@@ -32,6 +32,10 @@ class DomainReplace(BaseModel):
     domains: List[str]
 
 
+class CompanyUpdate(BaseModel):
+    name: str
+
+
 # -------------------------
 # Startup
 # -------------------------
@@ -117,6 +121,35 @@ def list_companies() -> List[Dict[str, Any]]:
             }
             for c in companies
         ]
+
+
+@app.get("/companies/{slug}")
+def get_company(slug: str) -> Dict[str, Any]:
+    with SessionLocal() as s:
+        c = _company_by_slug(s, slug)
+        if not c:
+            raise HTTPException(status_code=404, detail="Company not found")
+        return {
+            "id": c.id,
+            "slug": c.slug,
+            "name": c.name,
+            "domains": [d.domain for d in c.domains],
+        }
+
+
+@app.patch("/companies/{slug}")
+def update_company(slug: str, payload: CompanyUpdate) -> Dict[str, Any]:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name must not be empty")
+
+    with SessionLocal() as s:
+        c = _company_by_slug(s, slug)
+        if not c:
+            raise HTTPException(status_code=404, detail="Company not found")
+        c.name = name
+        s.commit()
+        return {"id": c.id, "slug": c.slug, "name": c.name, "domains": [d.domain for d in c.domains]}
 
 
 @app.put("/companies/{slug}/domains")
@@ -292,6 +325,37 @@ def list_scans(slug: str) -> List[Dict[str, Any]]:
             }
             for sc in scans
         ]
+
+
+@app.get("/companies/{slug}/scans/latest")
+def get_latest_scan(slug: str) -> Dict[str, Any]:
+    with SessionLocal() as s:
+        company = _company_by_slug(s, slug)
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+
+        scan = (
+            s.execute(
+                select(ScanRun)
+                .where(ScanRun.company_id == company.id)
+                .order_by(ScanRun.id.desc())
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+
+        if not scan:
+            raise HTTPException(status_code=404, detail="No scans for company")
+
+        return {
+            "id": scan.id,
+            "company_scan_number": scan.company_scan_number,
+            "status": scan.status,
+            "started_at": scan.started_at,
+            "completed_at": scan.completed_at,
+            "notes": scan.notes,
+        }
 
 
 # Optional hardening: these endpoints scope scan access to the company

@@ -27,6 +27,10 @@ class DomainReplace(BaseModel):
     domains: list[str]
 
 
+class CompanyUpdate(BaseModel):
+    name: str
+
+
 @app.on_event("startup")
 def _startup():
     init_db()
@@ -75,6 +79,40 @@ def list_companies():
         ]
 
 
+@app.get("/companies/{slug}")
+def get_company(slug: str):
+    with SessionLocal() as s:
+        c = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        if not c:
+            raise HTTPException(status_code=404, detail="Company not found")
+        return {
+            "id": c.id,
+            "slug": c.slug,
+            "name": c.name,
+            "domains": [d.domain for d in c.domains],
+        }
+
+
+@app.patch("/companies/{slug}")
+def update_company(slug: str, payload: CompanyUpdate):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name must not be empty")
+
+    with SessionLocal() as s:
+        c = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        if not c:
+            raise HTTPException(status_code=404, detail="Company not found")
+        c.name = name
+        s.commit()
+        return {
+            "id": c.id,
+            "slug": c.slug,
+            "name": c.name,
+            "domains": [d.domain for d in c.domains],
+        }
+
+
 @app.put("/companies/{slug}/domains")
 def replace_domains(slug: str, payload: DomainReplace):
     domains = [d.strip().lower().strip(".") for d in payload.domains]
@@ -93,6 +131,16 @@ def replace_domains(slug: str, payload: DomainReplace):
         s.commit()
 
     return {"slug": slug, "domains": domains}
+
+
+@app.delete("/companies/{slug}", status_code=204)
+def delete_company(slug: str):
+    with SessionLocal() as s:
+        c = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        if not c:
+            raise HTTPException(status_code=404, detail="Company not found")
+        s.delete(c)
+        s.commit()
 
 
 def _in_scope(domain: str, roots: set[str]) -> bool:
@@ -189,16 +237,56 @@ def list_scans(slug: str):
             .scalars()
             .all()
         )
+        total = len(scans)
         return [
             {
                 "id": sc.id,
+                "company_scan_number": total - idx,
                 "status": sc.status,
                 "started_at": sc.started_at,
                 "completed_at": sc.completed_at,
                 "notes": sc.notes,
             }
-            for sc in scans
+            for idx, sc in enumerate(scans)
         ]
+
+
+@app.get("/companies/{slug}/scans/latest")
+def get_latest_scan(slug: str):
+    scans = list_scans(slug)
+    if not scans:
+        raise HTTPException(status_code=404, detail="No scans for company")
+    return scans[0]
+
+
+@app.get("/companies/{slug}/scans/{scan_id}")
+def get_scan(slug: str, scan_id: int):
+    with SessionLocal() as s:
+        company = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        scan = s.get(ScanRun, scan_id)
+        if not scan or scan.company_id != company.id:
+            raise HTTPException(status_code=404, detail="Scan not found for company")
+
+        newer = (
+            s.execute(
+                select(ScanRun)
+                .where(ScanRun.company_id == company.id, ScanRun.id > scan.id)
+                .order_by(ScanRun.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+
+        return {
+            "id": scan.id,
+            "company_scan_number": len(newer) + 1,
+            "status": scan.status,
+            "started_at": scan.started_at,
+            "completed_at": scan.completed_at,
+            "notes": scan.notes,
+        }
 
 
 @app.get("/scans/{scan_id}/artifacts")
@@ -210,3 +298,28 @@ def get_scan_artifacts(scan_id: int):
 
         artifacts = s.execute(select(ScanArtifact).where(ScanArtifact.scan_id == scan_id)).scalars().all()
         return {a.artifact_type: json.loads(a.json_text) for a in artifacts}
+
+
+@app.get("/companies/{slug}/scans/{scan_id}/artifacts")
+def get_company_scan_artifacts(slug: str, scan_id: int):
+    with SessionLocal() as s:
+        company = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        scan = s.get(ScanRun, scan_id)
+        if not scan or scan.company_id != company.id:
+            raise HTTPException(status_code=404, detail="Scan not found for company")
+    return get_scan_artifacts(scan_id)
+
+
+@app.delete("/companies/{slug}/scans/{scan_id}", status_code=204)
+def delete_scan(slug: str, scan_id: int):
+    with SessionLocal() as s:
+        company = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        if not company:
+            raise HTTPException(status_code=404, detail="Company not found")
+        scan = s.get(ScanRun, scan_id)
+        if not scan or scan.company_id != company.id:
+            raise HTTPException(status_code=404, detail="Scan not found for company")
+        s.delete(scan)
+        s.commit()
