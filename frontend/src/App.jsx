@@ -66,11 +66,10 @@ function suggestInitialZoom(totalDomains, rootCount, maxLabelCap) {
   return 1.54;
 }
 
-function DomainRelationshipGraph({ artifacts }) {
+function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const [hoveredKey, setHoveredKey] = useState(null);
   const [selectedKey, setSelectedKey] = useState(null);
   const [zoom, setZoom] = useState(1);
-  const [maxLabelCap, setMaxLabelCap] = useState(36);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState(null);
@@ -385,12 +384,19 @@ function DomainRelationshipGraph({ artifacts }) {
     }
   }
 
-  const displayNodes = renderNodes.map((n) => {
+  const hideNonFocusedDomains = Boolean(focusRootNode && zoom >= 2.2);
+  const displayNodesBase = renderNodes.map((n) => {
     if (!focusRootNode || spreadFactor === 1) return n;
     if (n.kind === "hub") return n;
     const clusterRoot =
       n.kind === "root" ? n.domain : n.root;
     if (!clusterRoot || clusterRoot === focusedRoot) return n;
+    if (hideNonFocusedDomains && n.kind === "domain") {
+      return {
+        ...n,
+        hidden: true,
+      };
+    }
     const off = clusterOffsets.get(clusterRoot);
     if (!off) return n;
     return {
@@ -399,7 +405,33 @@ function DomainRelationshipGraph({ artifacts }) {
       y: n.y + off.y,
     };
   });
-  const displayNodeMap = new Map(displayNodes.map((n) => [n.key, n]));
+  const shouldSpreadAllDomains =
+    selectedGlobalNode?.kind === "hub" || (!selectedGlobalNode && zoom > 2.4);
+  const shouldSpreadFocusedRootDomains = Boolean(focusedRoot);
+  const localSpread =
+    zoom > 1.8 ? 1 + Math.min(1.6, (zoom - 1.8) * 0.65) : 1;
+  const rootMapBase = new Map(
+    displayNodesBase
+      .filter((n) => n.kind === "root")
+      .map((n) => [n.domain, n])
+  );
+  const displayNodes = displayNodesBase.map((n) => {
+    if (n.kind !== "domain" || n.hidden || localSpread === 1) return n;
+    if (shouldSpreadFocusedRootDomains && n.root !== focusedRoot) return n;
+    if (!shouldSpreadFocusedRootDomains && !shouldSpreadAllDomains) return n;
+    const rootNode = rootMapBase.get(n.root);
+    if (!rootNode) return n;
+    const dx = n.x - rootNode.x;
+    const dy = n.y - rootNode.y;
+    return {
+      ...n,
+      x: rootNode.x + dx * localSpread,
+      y: rootNode.y + dy * localSpread,
+    };
+  });
+
+  const visibleNodes = displayNodes.filter((n) => !n.hidden);
+  const displayNodeMap = new Map(visibleNodes.map((n) => [n.key, n]));
 
   const outgoing = new Map();
   for (const edge of renderEdges) {
@@ -407,10 +439,10 @@ function DomainRelationshipGraph({ artifacts }) {
     const toNode = displayNodeMap.get(edge.toKey);
     if (toNode) outgoing.get(edge.fromKey).push(toNode);
   }
-  const fixedLabelCount = displayNodes.filter((n) => n.kind !== "domain").length;
+  const fixedLabelCount = visibleNodes.filter((n) => n.kind !== "domain").length;
   const labelBudget = Math.max(0, maxLabelCap - fixedLabelCount);
   const budgetedDomainLabels = new Set(
-    displayNodes
+    visibleNodes
       .filter((n) => n.kind === "domain")
       .sort(
         (a, b) =>
@@ -426,6 +458,19 @@ function DomainRelationshipGraph({ artifacts }) {
     null;
   const hoveredNode =
     selectedNode || displayNodeMap.get(hoveredKey) || hubNode;
+  const dnsSummary = artifacts?.dns?.summary || null;
+  const intelSummary = artifacts?.dns_intel?.summary || null;
+  const intelByDomain = useMemo(
+    () =>
+      new Map(
+        (artifacts?.dns_intel?.domains || []).map((row) => [row.domain, row])
+      ),
+    [artifacts]
+  );
+  const nodeIntel = hoveredNode?.domain ? intelByDomain.get(hoveredNode.domain) : null;
+  const ptrValues = hoveredNode?.dns?.PTR
+    ? Object.values(hoveredNode.dns.PTR).flat().filter(Boolean)
+    : [];
 
   function focusNode(node, targetZoom = Math.max(zoom, 2.1)) {
     const z = clampZoom(Math.max(targetZoom, 2.5));
@@ -474,7 +519,7 @@ function DomainRelationshipGraph({ artifacts }) {
                 );
               })}
 
-              {displayNodes.map((node) => (
+              {visibleNodes.map((node) => (
                 <g
                   key={node.key}
                   className={`graph-node graph-node-${node.kind}`}
@@ -490,12 +535,12 @@ function DomainRelationshipGraph({ artifacts }) {
                     cy={node.y}
                     r={
                       node.kind === "hub"
-                        ? 6.5
+                        ? 8.125
                         : node.kind === "root"
-                          ? 3.75
+                          ? 4.6875
                           : node.kind === "aggregate"
-                            ? 3.1
-                            : 2.75
+                            ? 3.875
+                            : 3.4375
                     }
                   />
                   {node.kind !== "domain" ||
@@ -503,8 +548,8 @@ function DomainRelationshipGraph({ artifacts }) {
                   node.key === hoveredKey ||
                   node.key === selectedKey ? (
                     <text
-                      x={node.x}
-                      y={node.y + (node.kind === "hub" ? 42 : 27)}
+                      x={node.x + 8}
+                      y={node.y + 1}
                       fontSize={Math.max(4.5, 10 / Math.pow(Math.max(1, zoom), 1.8))}
                     >
                       {node.domain}
@@ -541,18 +586,6 @@ function DomainRelationshipGraph({ artifacts }) {
               </button>
             ) : null}
           </div>
-          <div className="graph-cap">
-            <span className="muted">Max labels</span>
-            <input
-              type="range"
-              min="12"
-              max="120"
-              step="4"
-              value={maxLabelCap}
-              onChange={(e) => setMaxLabelCap(Number(e.target.value))}
-            />
-            <span className="muted">{maxLabelCap}</span>
-          </div>
           <h3>{hoveredNode?.domain || "Details"}</h3>
           {selectedNode ? <div className="muted">Pinned selection</div> : null}
           <div className="muted">
@@ -582,6 +615,42 @@ function DomainRelationshipGraph({ artifacts }) {
               </div>
             </div>
           ) : null}
+          {hoveredNode?.kind === "hub" && dnsSummary ? (
+            <div className="graph-summary">
+              <div className="graph-record-row">
+                <span>Scanned domains</span>
+                <span>{dnsSummary.scanned_domains ?? 0}</span>
+              </div>
+              <div className="graph-record-row">
+                <span>Resolved domains</span>
+                <span>{dnsSummary.resolved_domains ?? 0}</span>
+              </div>
+              <div className="graph-record-row">
+                <span>Unique IPs</span>
+                <span>{dnsSummary.unique_ip_count ?? 0}</span>
+              </div>
+            </div>
+          ) : null}
+          {hoveredNode?.kind === "hub" && intelSummary ? (
+            <div className="graph-summary">
+              <div className="graph-record-row">
+                <span>Mail-enabled</span>
+                <span>{intelSummary.mail_enabled_domains ?? 0}</span>
+              </div>
+              <div className="graph-record-row">
+                <span>SPF</span>
+                <span>{intelSummary.spf_domains ?? 0}</span>
+              </div>
+              <div className="graph-record-row">
+                <span>DMARC</span>
+                <span>{intelSummary.dmarc_domains ?? 0}</span>
+              </div>
+              <div className="graph-record-row">
+                <span>IPv6 domains</span>
+                <span>{intelSummary.ipv6_domains ?? 0}</span>
+              </div>
+            </div>
+          ) : null}
           {hoveredNode?.kind === "aggregate" ? (
             <div className="muted">
               {hoveredNode.count} domains hidden at this zoom level. Zoom in to expand.
@@ -589,18 +658,129 @@ function DomainRelationshipGraph({ artifacts }) {
           ) : null}
           {hoveredNode?.kind === "domain" || hoveredNode?.kind === "root" ? (
             <>
+              {nodeIntel ? (
+                <div className="graph-summary">
+                  <div className="graph-record-row">
+                    <span>Resolves</span>
+                    <span>{nodeIntel.resolves ? "yes" : "no"}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>Root</span>
+                    <span>{nodeIntel.root || "-"}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>Depth</span>
+                    <span>{nodeIntel.label_depth}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>MX / SPF / DMARC</span>
+                    <span>
+                      {nodeIntel.has_mx ? "MX" : "-"} / {nodeIntel.has_spf ? "SPF" : "-"} /{" "}
+                      {nodeIntel.has_dmarc ? "DMARC" : "-"}
+                    </span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>CDN / Proxy</span>
+                    <span>
+                      {nodeIntel.web?.is_cdn_or_proxy
+                        ? nodeIntel.web?.cdn_or_proxy_provider || "yes"
+                        : "no"}
+                    </span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>HTTP</span>
+                    <span>
+                      {nodeIntel.web?.reachable
+                        ? `${nodeIntel.web?.scheme?.toUpperCase() || "HTTP"} ${nodeIntel.web?.status_code ?? ""}`.trim()
+                        : "unreachable"}
+                    </span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>Web Server</span>
+                    <span>
+                      {nodeIntel.web?.server_version_hint ||
+                        nodeIntel.web?.server_header ||
+                        "-"}
+                    </span>
+                  </div>
+                  {nodeIntel.web?.title ? (
+                    <div className="graph-record-row">
+                      <span>Title</span>
+                      <span>{nodeIntel.web.title}</span>
+                    </div>
+                  ) : null}
+                  {nodeIntel.provider_hints?.length ? (
+                    <div className="graph-list-block">
+                      <div className="muted">Provider hints</div>
+                      <div className="graph-chip-list">
+                        {nodeIntel.provider_hints.map((p) => (
+                          <span key={`hint-${hoveredNode.key}-${p}`} className="graph-chip">
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="graph-kv">
                 <span>DNS Records</span>
                 <span>{hoveredNode.totalRecords || 0}</span>
               </div>
               {hoveredNode?.dns ? (
                 <div className="graph-records">
+                  <div className="graph-record-row">
+                    <span>Resolved At</span>
+                    <span>{hoveredNode.dns.resolved_at ? formatDate(hoveredNode.dns.resolved_at) : "-"}</span>
+                  </div>
                   {["A", "AAAA", "CNAME", "MX", "NS"].map((k) => (
                     <div key={k} className="graph-record-row">
                       <span>{k}</span>
                       <span>{(hoveredNode.dns[k] || []).length}</span>
                     </div>
                   ))}
+                  <div className="graph-record-row">
+                    <span>TXT</span>
+                    <span>{(hoveredNode.dns.TXT || []).length}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>CAA</span>
+                    <span>{(hoveredNode.dns.CAA || []).length}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>PTR names</span>
+                    <span>{ptrValues.length}</span>
+                  </div>
+                  {(hoveredNode.dns.ips || []).length ? (
+                    <div className="graph-list-block">
+                      <div className="muted">IPs</div>
+                      <div className="graph-chip-list">
+                        {hoveredNode.dns.ips.slice(0, 10).map((ip) => (
+                          <span key={`ip-${hoveredNode.key}-${ip}`} className="graph-chip">
+                            {ip}
+                          </span>
+                        ))}
+                        {hoveredNode.dns.ips.length > 10 ? (
+                          <span className="muted">+{hoveredNode.dns.ips.length - 10} more</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                  {ptrValues.length ? (
+                    <div className="graph-list-block">
+                      <div className="muted">PTR</div>
+                      <div className="graph-chip-list">
+                        {ptrValues.slice(0, 8).map((ptr) => (
+                          <span key={`ptr-${hoveredNode.key}-${ptr}`} className="graph-chip">
+                            {ptr}
+                          </span>
+                        ))}
+                        {ptrValues.length > 8 ? (
+                          <span className="muted">+{ptrValues.length - 8} more</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="muted">No DNS artifact for this node.</div>
@@ -627,6 +807,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState("light");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [maxLabelCap, setMaxLabelCap] = useState(36);
 
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerDomain, setNewCustomerDomain] = useState("");
@@ -693,6 +875,19 @@ export default function App() {
     }
   }
 
+  async function removeDomainFromCompany(domain) {
+    if (!activeCompany) return;
+    const remaining = activeCompany.domains.filter((d) => d !== domain);
+    if (remaining.length === 0) {
+      throw new Error("A customer must have at least one domain");
+    }
+    if (!confirm(`Remove domain '${domain}' from ${activeCompany.slug}?`)) {
+      return;
+    }
+    await api.replaceDomains(activeCompany.slug, remaining);
+    await loadCompany(activeCompany.slug);
+  }
+
   async function handleSelectCustomer(option) {
     setSelectedCustomer(option);
     setSelectedScanId(null);
@@ -734,11 +929,8 @@ export default function App() {
           </div>
         </div>
         <div className="status">
-          <button
-            className="ghost"
-            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
-          >
-            {theme === "light" ? "Dark mode" : "Light mode"}
+          <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+            ⚙
           </button>
           <span className={loading ? "dot pulse" : "dot"} />
           {loading ? "Syncing" : "Idle"}
@@ -835,8 +1027,20 @@ export default function App() {
               <div className="domain-list">
                 {activeCompany?.domains?.length ? (
                   activeCompany.domains.map((domain) => (
-                    <div key={domain} className="domain-item">
-                      {domain}
+                    <div key={domain} className="domain-item domain-row">
+                      <span>{domain}</span>
+                      <button
+                        className="danger ghost domain-delete"
+                        onClick={() =>
+                          runWithStatus(async () => {
+                            await removeDomainFromCompany(domain);
+                          })
+                        }
+                        title={`Delete ${domain}`}
+                        aria-label={`Delete ${domain}`}
+                      >
+                        🗑
+                      </button>
                     </div>
                   ))
                 ) : (
@@ -965,8 +1169,20 @@ export default function App() {
                     <h3>Domains</h3>
                     <div className="domain-list">
                       {activeCompany.domains.map((domain) => (
-                        <div key={domain} className="domain-item">
-                          {domain}
+                        <div key={domain} className="domain-item domain-row">
+                          <span>{domain}</span>
+                          <button
+                            className="danger ghost domain-delete"
+                            onClick={() =>
+                              runWithStatus(async () => {
+                                await removeDomainFromCompany(domain);
+                              })
+                            }
+                            title={`Delete ${domain}`}
+                            aria-label={`Delete ${domain}`}
+                          >
+                            🗑
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1033,7 +1249,7 @@ export default function App() {
                       >
                         <div className="scan-main">
                           <div className="scan-title">
-                            #{scan.company_scan_number} · id {scan.id}
+                            #{scan.company_scan_number}
                           </div>
                           <div className="scan-meta">
                             {scan.status} · started {formatDate(scan.started_at)}
@@ -1084,7 +1300,7 @@ export default function App() {
                     <h2>Artifacts</h2>
                     <div className="muted">
                       {activeScan
-                        ? `Scan #${activeScan.company_scan_number} (id ${activeScan.id})`
+                        ? `Scan #${activeScan.company_scan_number}`
                         : "Select a scan to view artifacts"}
                     </div>
                   </div>
@@ -1093,7 +1309,7 @@ export default function App() {
                   <div className="empty">No artifacts loaded</div>
                 ) : (
                   <>
-                    <DomainRelationshipGraph artifacts={artifacts} />
+                    <DomainRelationshipGraph artifacts={artifacts} maxLabelCap={maxLabelCap} />
                     <details>
                       <summary className="muted">Raw JSON artifacts</summary>
                       <pre className="code">
@@ -1109,6 +1325,43 @@ export default function App() {
           {error ? <div className="toast">{error}</div> : null}
         </main>
       </div>
+      {settingsOpen ? (
+        <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}>
+          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h2>Settings</h2>
+              <button className="ghost" onClick={() => setSettingsOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="settings-row">
+              <label>
+                Theme
+                <select
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value)}
+                >
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </label>
+            </div>
+            <div className="settings-row">
+              <label>
+                Max graph labels ({maxLabelCap})
+                <input
+                  type="range"
+                  min="12"
+                  max="120"
+                  step="4"
+                  value={maxLabelCap}
+                  onChange={(e) => setMaxLabelCap(Number(e.target.value))}
+                />
+              </label>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
