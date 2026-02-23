@@ -99,6 +99,28 @@ Notes:
 - The frontend uses a Vite proxy to the backend for API routes (`/companies`, `/scan`, `/health`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
 
+## Frontend UX
+
+- Customer selection is dropdown-driven:
+  - Default option is `Add Customer`
+  - Creating a customer requires `Customer name` and `Domain`
+  - Slug is auto-generated uniquely on create
+- When an existing customer is selected:
+  - Existing domains are listed
+  - `Add domain` appends and saves domain scope
+- Scan execution:
+  - Starting a scan shows an in-progress visualization
+  - New scan starts are blocked while a scan is running
+- Artifacts visualization:
+  - Interactive hub/spoke graph for scope roots and discovered domains
+  - Hover or click nodes to inspect DNS summary (`A`, `AAAA`, `CNAME`, `MX`, `NS`)
+  - Click pins details in the side panel (`Unpin` to clear)
+  - Hovering a hub/root shows a spoke list; clicking a spoke focuses that node
+  - `Ctrl + Scroll` zooms graph, drag to pan, `Reset` restores view
+  - Graph supports adaptive detail levels and label caps for crowded scans
+- Theme:
+  - Global light/dark mode toggle in the top bar
+
 ## CLI
 
 ```powershell
