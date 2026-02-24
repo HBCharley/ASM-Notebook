@@ -51,3 +51,4 @@ build/
 .vite/
 .env
 .env.*
+!.env.docker.example

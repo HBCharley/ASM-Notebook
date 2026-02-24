@@ -81,6 +81,28 @@ poetry run uvicorn asm_notebook.api_main:app --reload
 python -m uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
 ```
 
+### Run with Local PostgreSQL (Docker)
+
+Start local PostgreSQL:
+
+```powershell
+Copy-Item .env.docker.example .env
+docker compose up -d postgres
+```
+
+Run API locally against PostgreSQL:
+
+```powershell
+$env:ASM_DATABASE_URL = "postgresql+psycopg://asm:asm_dev_password@127.0.0.1:5432/asm_notebook"
+poetry run uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Optional full Docker stack (PostgreSQL + API + Frontend):
+
+```powershell
+docker compose --profile full up --build
+```
+
 Health check:
 
 ```powershell
@@ -250,6 +272,7 @@ Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/by-number/1"
 - For cloud databases, set `ASM_DATABASE_URL` (takes precedence over `ASM_DB_PATH`).
   - PostgreSQL example: `postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME`
   - Legacy Heroku-style URLs (`postgres://...`) are auto-normalized at startup.
+- Local Dockerized PostgreSQL is available via `docker-compose.yml`.
 - Scan artifacts are stored as JSON in the database and can be exported via `scan export`.
 - The database file is intentionally excluded from Git.
 
