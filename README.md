@@ -101,7 +101,7 @@ Open:
 
 Notes:
 
-- The frontend uses a Vite proxy to the backend for API routes (`/companies`, `/scan`, `/health`).
+- The frontend uses a Vite proxy to the backend for API routes (`/companies`, `/health`, plus legacy `/scan` passthrough in `vite.config.js`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
 
 ## Frontend UX
@@ -118,6 +118,7 @@ Notes:
   - New scan starts are blocked while a scan is running
 - Artifacts visualization:
   - Interactive hub/spoke graph for scope roots and discovered domains
+  - Optional `Tree view` (`Scope Browser`) to navigate roots/domains and focus graph nodes
   - Hover or click nodes to inspect DNS summary (`A`, `AAAA`, `CNAME`, `MX`, `NS`)
   - Click pins details in the side panel (`Unpin` to clear)
   - Hovering a hub/root shows a spoke list; clicking a spoke focuses that node
@@ -240,7 +241,7 @@ Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/by-number/1"
    - `dns`
    - `web`
    - `dns_intel`
-6. Update `ScanRun` status/timestamps (`success` or `failed`).
+6. Update `ScanRun` progress notes during execution (e.g., `3/6 Persisting domains...`) and finalize status/timestamps (`success` or `failed`).
 
 ## Data & Storage
 
