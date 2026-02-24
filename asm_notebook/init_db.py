@@ -1,10 +1,13 @@
 from sqlalchemy import text
 
-from .db import ENGINE, Base
+from .db import ENGINE, Base, IS_SQLITE
 from . import models  # noqa: F401
 
 
 def _sqlite_scan_number_migration() -> None:
+    if not IS_SQLITE:
+        return
+
     with ENGINE.begin() as conn:
         table_info = conn.execute(text("PRAGMA table_info(scan_runs)")).fetchall()
         if not table_info:

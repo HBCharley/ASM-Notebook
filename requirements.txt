@@ -6,3 +6,4 @@ httpx
 dnspython
 rich
 uvicorn
+psycopg[binary]

@@ -246,7 +246,10 @@ Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/by-number/1"
 ## Data & Storage
 
 - The app uses a local SQLite database (default: `asm_notebook.sqlite3` in the repo root).
-- Override DB file path with `ASM_DB_PATH` (useful for tests).
+- Override DB file path with `ASM_DB_PATH` (useful for local tests/dev).
+- For cloud databases, set `ASM_DATABASE_URL` (takes precedence over `ASM_DB_PATH`).
+  - PostgreSQL example: `postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME`
+  - Legacy Heroku-style URLs (`postgres://...`) are auto-normalized at startup.
 - Scan artifacts are stored as JSON in the database and can be exported via `scan export`.
 - The database file is intentionally excluded from Git.
 
@@ -264,6 +267,31 @@ No manual migration step is required for this change.
 
 - POC closeout checklist: `docs/POC_CLOSEOUT_CHECKLIST.md`
 - GCP migration plan: `docs/GCP_MIGRATION_PLAN.md`
+
+## GCP Deployment Baseline
+
+Container assets included:
+
+- Backend image: `Dockerfile`
+- Frontend image: `frontend/Dockerfile` (+ SPA nginx config in `frontend/nginx.conf`)
+- Cloud Build pipelines:
+  - `cloudbuild.api.yaml`
+  - `cloudbuild.frontend.yaml`
+
+Backend deploy via Cloud Build:
+
+```powershell
+gcloud builds submit --config cloudbuild.api.yaml
+```
+
+Frontend deploy via Cloud Build:
+
+```powershell
+gcloud builds submit --config cloudbuild.frontend.yaml
+```
+
+For frontend-to-API routing in cloud, set `_VITE_API_BASE` substitution in `cloudbuild.frontend.yaml`
+to your backend URL (for example: `https://asm-api-xxxxx-uc.a.run.app`).
 
 ## Testing
 
