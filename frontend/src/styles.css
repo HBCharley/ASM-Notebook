@@ -86,6 +86,10 @@ body {
   display: inline-block;
 }
 
+.dot.scan-running {
+  background: #e08a00;
+}
+
 .dot.pulse {
   animation: pulse 1.2s infinite ease-in-out;
 }
@@ -446,6 +450,113 @@ button.danger.ghost {
   position: relative;
 }
 
+.graph-nav-bug {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 4;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--card) 95%, transparent);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.graph-nav-bug.active {
+  background: color-mix(in srgb, var(--accent) 20%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.graph-tree {
+  position: absolute;
+  top: 44px;
+  left: 10px;
+  bottom: 10px;
+  width: min(360px, calc(100% - 20px));
+  z-index: 3;
+  overflow: auto;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.graph-tree-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tree-section {
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+
+.tree-branch {
+  margin-bottom: 6px;
+}
+
+.tree-children {
+  margin-top: 4px;
+  margin-left: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tree-item {
+  width: 100%;
+  border-radius: 8px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 7px 9px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.tree-item-hub,
+.tree-item-root {
+  font-weight: 600;
+}
+
+.tree-item-domain {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.tree-item.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.tree-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.tree-domain-name {
+  font-family: var(--mono);
+}
+
+.tree-domain-props {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.tree-empty {
+  padding: 4px 0 2px;
+}
+
 .domain-graph {
   width: 100%;
   min-height: 380px;
@@ -654,5 +765,9 @@ button.danger.ghost {
 
   .graph-grid {
     grid-template-columns: 1fr;
+  }
+
+  .graph-tree {
+    width: calc(100% - 20px);
   }
 }

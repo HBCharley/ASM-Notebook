@@ -71,9 +71,6 @@ python -m pip install "uvicorn[standard]"
 ## Run the API (Poetry)
 
 ```powershell
-# Optional: enable HTTP Basic auth for all API routes except /health
-$env:ASM_BASIC_AUTH_USER = "admin"
-$env:ASM_BASIC_AUTH_PASS = "change-me"
 poetry run uvicorn asm_notebook.api_main:app --reload
 ```
 
@@ -81,9 +78,6 @@ poetry run uvicorn asm_notebook.api_main:app --reload
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-# Optional: enable HTTP Basic auth for all API routes except /health
-$env:ASM_BASIC_AUTH_USER = "admin"
-$env:ASM_BASIC_AUTH_PASS = "change-me"
 python -m uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -98,9 +92,6 @@ Invoke-RestMethod "http://127.0.0.1:8000/health"
 ```powershell
 cd frontend
 npm install
-# Optional: pass API basic auth credentials to the web app request client
-$env:VITE_BASIC_AUTH_USER = "admin"
-$env:VITE_BASIC_AUTH_PASS = "change-me"
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
@@ -112,7 +103,6 @@ Notes:
 
 - The frontend uses a Vite proxy to the backend for API routes (`/companies`, `/scan`, `/health`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
-- If API basic auth is enabled, set `VITE_BASIC_AUTH_USER` and `VITE_BASIC_AUTH_PASS` for frontend requests.
 
 ## Frontend UX
 
@@ -168,9 +158,6 @@ poetry run python -m asm_notebook.cli company delete testco --yes
 ```
 
 ## API Endpoints
-
-When `ASM_BASIC_AUTH_USER` and `ASM_BASIC_AUTH_PASS` are set, API routes require HTTP Basic auth
-(except `GET /health`).
 
 Health:
 

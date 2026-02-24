@@ -69,6 +69,8 @@ function suggestInitialZoom(totalDomains, rootCount, maxLabelCap) {
 function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const [hoveredKey, setHoveredKey] = useState(null);
   const [selectedKey, setSelectedKey] = useState(null);
+  const [treeOpen, setTreeOpen] = useState(false);
+  const [expandedRoots, setExpandedRoots] = useState({});
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -291,6 +293,13 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     list.sort((a, b) => a.domain.localeCompare(b.domain));
     domainsByRoot.set(root, list);
   }
+  const unscopedDomains = domainNodes
+    .filter((d) => !d.root)
+    .slice()
+    .sort((a, b) => a.domain.localeCompare(b.domain));
+  const sortedRoots = rootNodes
+    .slice()
+    .sort((a, b) => a.domain.localeCompare(b.domain));
 
   const renderNodes = [hubNode, ...rootNodes];
   const renderEdges = rootNodes.map((root) => ({
@@ -482,6 +491,32 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     setSelectedKey(node.key);
   }
 
+  function toggleRoot(rootDomain) {
+    setExpandedRoots((prev) => ({
+      ...prev,
+      [rootDomain]: !prev[rootDomain],
+    }));
+  }
+
+  function selectFromTree(node) {
+    setHoveredKey(node.key);
+    if (node.kind === "domain" || node.kind === "root") {
+      focusNode(node, node.kind === "domain" ? 2.5 : 2.1);
+      return;
+    }
+    setSelectedKey(node.key);
+    setPan({ x: 0, y: 0 });
+    setZoom(clampZoom(1.3));
+  }
+
+  useEffect(() => {
+    const nextExpanded = {};
+    sortedRoots.slice(0, 2).forEach((root) => {
+      nextExpanded[root.domain] = true;
+    });
+    setExpandedRoots(nextExpanded);
+  }, [artifacts]);
+
   return (
     <div className="graph-wrap">
       <div className="graph-meta muted">
@@ -489,6 +524,94 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       </div>
       <div className="graph-grid">
         <div className="graph-canvas">
+          <button
+            className={`graph-nav-bug ${treeOpen ? "active" : ""}`}
+            onClick={() => setTreeOpen((v) => !v)}
+            aria-pressed={treeOpen}
+          >
+            {treeOpen ? "Hide tree" : "Tree view"}
+          </button>
+          {treeOpen ? (
+            <div className="graph-tree panel">
+              <div className="graph-tree-head">
+                <strong>Scope Browser</strong>
+                <span className="muted">
+                  {graph.counts.roots} roots · {graph.counts.domains} domains
+                </span>
+              </div>
+              <button
+                className={`tree-item tree-item-hub ${selectedKey === hubNode.key ? "active" : ""}`}
+                onClick={() => selectFromTree(hubNode)}
+              >
+                Scan Scope
+              </button>
+              <div className="tree-section muted">Roots</div>
+              {sortedRoots.map((root) => {
+                const rootDomains = domainsByRoot.get(root.domain) || [];
+                const isOpen = !!expandedRoots[root.domain];
+                return (
+                  <div key={`tree-root-${root.domain}`} className="tree-branch">
+                    <button
+                      className={`tree-item tree-item-root ${selectedKey === root.key ? "active" : ""}`}
+                      onClick={() => {
+                        toggleRoot(root.domain);
+                        selectFromTree(root);
+                      }}
+                    >
+                      <span>{isOpen ? "▾" : "▸"} {root.domain}</span>
+                      <span className="tree-count">{rootDomains.length}</span>
+                    </button>
+                    {isOpen ? (
+                      <div className="tree-children">
+                        {rootDomains.map((domainNode) => {
+                          const domainIntel = intelByDomain.get(domainNode.domain);
+                          return (
+                            <button
+                              key={`tree-domain-${domainNode.domain}`}
+                              className={`tree-item tree-item-domain ${selectedKey === domainNode.key ? "active" : ""}`}
+                              onClick={() => selectFromTree(domainNode)}
+                            >
+                              <span className="tree-domain-name">{domainNode.domain}</span>
+                              <span className="tree-domain-props">
+                                {domainIntel?.resolves ? "DNS" : "No DNS"}
+                                {domainIntel?.web?.reachable ? ` · HTTP ${domainIntel.web.status_code ?? "-"}` : ""}
+                              </span>
+                            </button>
+                          );
+                        })}
+                        {rootDomains.length === 0 ? (
+                          <div className="muted tree-empty">No discovered domains</div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+              {unscopedDomains.length ? (
+                <>
+                  <div className="tree-section muted">Unscoped</div>
+                  <div className="tree-children">
+                    {unscopedDomains.map((domainNode) => {
+                      const domainIntel = intelByDomain.get(domainNode.domain);
+                      return (
+                        <button
+                          key={`tree-unscoped-${domainNode.domain}`}
+                          className={`tree-item tree-item-domain ${selectedKey === domainNode.key ? "active" : ""}`}
+                          onClick={() => selectFromTree(domainNode)}
+                        >
+                          <span className="tree-domain-name">{domainNode.domain}</span>
+                          <span className="tree-domain-props">
+                            {domainIntel?.resolves ? "DNS" : "No DNS"}
+                            {domainIntel?.web?.reachable ? ` · HTTP ${domainIntel.web.status_code ?? "-"}` : ""}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           <svg
             ref={setGraphEl}
             className={`domain-graph ${dragging ? "dragging" : ""}`}
@@ -932,7 +1055,9 @@ export default function App() {
           <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
             ⚙
           </button>
-          <span className={loading ? "dot pulse" : "dot"} />
+          <span
+            className={`dot ${loading ? "pulse" : ""} ${hasRunningScan ? "scan-running" : ""}`.trim()}
+          />
           {loading ? "Syncing" : "Idle"}
         </div>
       </header>

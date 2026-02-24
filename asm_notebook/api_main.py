@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import binascii
 import json
 import os
 import re
-import secrets
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -68,45 +64,6 @@ def _in_scope(domain: str, roots: set[str]) -> bool:
 
 def _is_test_mode() -> bool:
     return os.getenv("ASM_TEST_MODE", "").strip() == "1"
-
-
-def _basic_auth_enabled() -> bool:
-    return bool(os.getenv("ASM_BASIC_AUTH_USER")) and bool(os.getenv("ASM_BASIC_AUTH_PASS"))
-
-
-def _unauthorized_response() -> JSONResponse:
-    return JSONResponse(
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="ASM Notebook"'},
-        content={"detail": "Unauthorized"},
-    )
-
-
-def _has_valid_basic_auth(request: Request) -> bool:
-    expected_user = os.getenv("ASM_BASIC_AUTH_USER", "")
-    expected_pass = os.getenv("ASM_BASIC_AUTH_PASS", "")
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Basic "):
-        return False
-    token = header[len("Basic ") :].strip()
-    try:
-        decoded = base64.b64decode(token).decode("utf-8")
-    except (binascii.Error, UnicodeDecodeError):
-        return False
-    user, sep, password = decoded.partition(":")
-    if not sep:
-        return False
-    return secrets.compare_digest(user, expected_user) and secrets.compare_digest(
-        password, expected_pass
-    )
-
-
-@app.middleware("http")
-async def enforce_basic_auth(request: Request, call_next):
-    if _basic_auth_enabled() and request.url.path != "/health":
-        if not _has_valid_basic_auth(request):
-            return _unauthorized_response()
-    return await call_next(request)
 
 
 def _company_by_slug(session: SessionLocal, slug: str) -> Company | None:
@@ -305,16 +262,29 @@ def _collect_scan_data_test_mode(
 
 def _execute_scan(scan_id: int, roots: list[str]) -> None:
     roots_set = set(roots)
+
+    def set_progress(step: int, total: int, message: str) -> None:
+        with SessionLocal() as s:
+            scan = s.get(ScanRun, scan_id)
+            if not scan:
+                return
+            scan.notes = f"{step}/{total} {message}"[:250]
+            s.commit()
+
     try:
+        set_progress(1, 6, "Preparing scan")
         if _is_test_mode():
+            set_progress(2, 6, "Collecting domains (test mode)")
             domains_sorted, resolvable_domains, dns_records, web_records = _collect_scan_data_test_mode(
                 roots_set
             )
         else:
+            set_progress(2, 6, "Collecting in-scope domains from CT")
             domains_sorted, resolvable_domains, dns_records, web_records = asyncio.run(
                 _collect_scan_data(roots_set)
             )
 
+        set_progress(3, 6, "Persisting domains and DNS artifacts")
         with SessionLocal() as s:
             scan = s.get(ScanRun, scan_id)
             if not scan:
@@ -356,6 +326,9 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
                     },
                 },
             )
+            s.commit()
+
+            set_progress(4, 6, "Persisting web metadata")
             web_reachable = sum(1 for w in web_records if w.get("reachable"))
             upsert_artifact(
                 "web",
@@ -368,6 +341,9 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
                     },
                 },
             )
+            s.commit()
+
+            set_progress(5, 6, "Computing intel summary")
             dns_by_domain = {r.get("domain"): r for r in dns_records}
             web_by_domain = {w.get("domain"): w for w in web_records}
             intel_rows = [
@@ -382,8 +358,10 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
                 },
             )
 
+            set_progress(6, 6, "Finalizing scan")
             scan.status = "success"
             scan.completed_at = _now_utc()
+            scan.notes = "6/6 Scan complete"
             s.commit()
     except Exception as e:
         with SessionLocal() as s:
