@@ -58,10 +58,43 @@ body {
   gap: 18px;
 }
 
-.brand-title {
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.brand-logo {
+  display: flex;
+  align-items: center;
+}
+
+.logo-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.logo-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+
+.logo {
+  height: 96px;
+  width: auto;
+  display: block;
+}
+
+.theme-dark .logo-light {
+  display: none;
+}
+
+.theme-light .logo-dark {
+  display: none;
 }
 
 .brand-sub {
@@ -280,6 +313,9 @@ button.danger.ghost {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  width: 100%;
+  max-width: 1500px;
+  margin: 0 auto;
 }
 
 .card {
@@ -287,6 +323,10 @@ button.danger.ghost {
   border-radius: 18px;
   padding: 20px;
   box-shadow: var(--shadow);
+}
+
+.card.collapsed {
+  padding-bottom: 12px;
 }
 
 .card-header {
@@ -547,6 +587,7 @@ button.danger.ghost {
   display: grid;
   grid-template-columns: 2fr 1fr;
   gap: 14px;
+  position: relative;
 }
 
 .graph-canvas {
@@ -680,10 +721,6 @@ button.danger.ghost {
 }
 
 @media (min-width: 1400px) {
-  .layout {
-    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
-  }
-
   .graph-grid {
     grid-template-columns: 3fr 1fr;
   }
@@ -763,6 +800,36 @@ button.danger.ghost {
   background: var(--card);
 }
 
+.graph-hover.floating {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: min(620px, calc(100% - 28px));
+  max-height: calc(100% - 28px);
+  overflow: auto;
+  z-index: 6;
+  box-shadow: 0 18px 45px rgba(7, 6, 5, 0.22);
+}
+
+.graph-hover.floating.overlay {
+  inset: 12px;
+  width: auto;
+  max-height: none;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.graph-hover-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.graph-hover-title {
+  font-weight: 600;
+}
+
 .graph-kv,
 .graph-record-row {
   display: flex;
@@ -823,6 +890,28 @@ button.danger.ghost {
 
 .graph-list-block {
   margin-top: 8px;
+}
+
+.graph-details {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.graph-details summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  list-style: none;
+}
+
+.graph-details summary::-webkit-details-marker {
+  display: none;
 }
 
 .graph-chip-list {
@@ -898,6 +987,31 @@ button.danger.ghost {
   background: var(--card);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 12, 18, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 24px;
+}
+
+.modal-panel {
+  width: min(920px, 92vw);
+  max-height: min(80vh, 820px);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 20px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 @media (max-width: 900px) {
   .layout {
     grid-template-columns: 1fr;
@@ -913,6 +1027,10 @@ button.danger.ghost {
     width: 100%;
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .logo {
+    height: 60px;
   }
 
   .graph-grid {

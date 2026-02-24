@@ -47,3 +47,19 @@ def resolve_dns(domain: str) -> dict:
         "ips": ips,
         "PTR": ptr,
     }
+
+
+def resolve_ips(domain: str) -> list[str]:
+    r = dns.resolver.Resolver()
+    r.lifetime = 3
+
+    def q(qtype: str) -> list[str]:
+        try:
+            ans = r.resolve(domain, qtype)
+            return [str(x).rstrip(".") for x in ans]
+        except Exception:
+            return []
+
+    a = q("A")
+    aaaa = q("AAAA")
+    return sorted({*a, *aaaa})

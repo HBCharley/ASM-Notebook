@@ -145,9 +145,8 @@ Notes:
   - Default option is `Add Customer`
   - Creating a customer requires `Customer name` and `Domain`
   - Slug is auto-generated uniquely on create
-- When an existing customer is selected:
-  - Existing domains are listed
-  - `Add domain` appends and saves domain scope
+- Customer details (rename + domains) live in a modal (`Manage details`)
+- Customer and Scans sections can be minimized; state is saved in local storage
 - Scan execution:
   - Starting a scan shows an in-progress visualization
   - New scan starts are blocked while a scan is running
@@ -155,10 +154,12 @@ Notes:
   - Interactive hub/spoke graph for scope roots and discovered domains
   - Optional `Tree view` (`Scope Browser`) to navigate roots/domains and focus graph nodes
   - Hover or click nodes to inspect DNS summary (`A`, `AAAA`, `CNAME`, `MX`, `NS`)
-  - Click pins details in the side panel (`Unpin` to clear)
+  - Clicking a node pins details; pinned view overlays the artifact panel for full detail
   - Hovering a hub/root shows a spoke list; clicking a spoke focuses that node
   - `Ctrl + Scroll` zooms graph, drag to pan, `Reset` restores view
   - Graph supports adaptive detail levels and label caps for crowded scans
+  - Enriched fields shown per domain: SPF/DMARC/MTA-STS/BIMI/DKIM hints, security headers, HSTS status,
+    TLS/cert details, fingerprints, ASN for IPs, and dangling CNAME detection
 - Theme:
   - Global light/dark mode toggle in the top bar
 

@@ -17,7 +17,7 @@ from .db import SessionLocal
 from .init_db import init_db
 from .models import Company, CompanyDomain, ScanArtifact, ScanRun
 from .plugins.ct import ct_subdomains
-from .plugins.dns import resolve_dns
+from .plugins.dns import resolve_dns, resolve_ips
 from .plugins.http_meta import fetch_http_metadata
 from .plugins.ip_intel import lookup_asn_for_ips
 
@@ -179,21 +179,32 @@ def _domain_intel(
     rec: dict[str, Any],
     web: dict[str, Any] | None,
     asn_by_ip: dict[str, dict[str, Any]] | None = None,
+    cname_targets: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     d = _normalize_domain(domain)
     root = next((r for r in sorted(roots) if d == r or d.endswith("." + r)), None)
     txt = [str(t).lower() for t in (rec.get("TXT") or [])]
+    cname_list = [str(c).lower() for c in (rec.get("CNAME") or [])]
     ips = rec.get("ips") or []
     asn_by_ip = asn_by_ip or {}
+    cname_targets = cname_targets or {}
     ip_asn = [asn_by_ip[ip] for ip in ips if ip in asn_by_ip]
     has_ipv4 = any("." in ip for ip in ips)
     has_ipv6 = any(":" in ip for ip in ips)
     edge = _edge_and_server(domain, rec, web)
-    has_spf = any("v=spf1" in t for t in txt)
-    has_dmarc = any("v=dmarc1" in t for t in txt)
+    spf_records = [t for t in txt if "v=spf1" in t]
+    dmarc_records = [t for t in txt if "v=dmarc1" in t]
+    has_spf = bool(spf_records)
+    has_dmarc = bool(dmarc_records)
+    dmarc_policy = ""
+    if dmarc_records:
+        m = re.search(r"\bp=([a-z]+)", dmarc_records[0])
+        dmarc_policy = m.group(1) if m else ""
     has_mta_sts = any("v=stsv1" in t for t in txt)
     has_bimi = any("v=bimi1" in t for t in txt)
     dkim_records = [t for t in txt if "v=dkim1" in t]
+    cname_resolves = any(cname_targets.get(t) for t in cname_list)
+    dangling_cname = bool(cname_list) and not ips and not cname_resolves
     return {
         "domain": domain,
         "root": root,
@@ -205,9 +216,14 @@ def _domain_intel(
         "has_ipv4": has_ipv4,
         "has_ipv6": has_ipv6,
         "has_cname": bool(rec.get("CNAME")),
+        "dangling_cname": dangling_cname,
         "has_mx": bool(rec.get("MX")),
         "has_spf": has_spf,
+        "spf_txt_records": len(spf_records),
+        "spf_multiple": len(spf_records) > 1,
         "has_dmarc": has_dmarc,
+        "dmarc_policy": dmarc_policy,
+        "dmarc_txt_records": len(dmarc_records),
         "has_mta_sts": has_mta_sts,
         "has_bimi": has_bimi,
         "dkim_txt_records": len(dkim_records),
@@ -221,6 +237,9 @@ def _domain_intel(
             "final_url": (web or {}).get("final_url", ""),
             "title": (web or {}).get("title", ""),
             "security_headers": (web or {}).get("security_headers") or {},
+            "fingerprints": (web or {}).get("fingerprints") or [],
+            "hsts": (web or {}).get("hsts") or {},
+            "tls": (web or {}).get("tls") or {},
             **edge,
         },
     }
@@ -228,9 +247,12 @@ def _domain_intel(
 
 def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
     providers: Counter[str] = Counter()
+    dmarc_policy: Counter[str] = Counter()
     for row in intel_rows:
         for p in row.get("provider_hints", []):
             providers[p] += 1
+        if row.get("dmarc_policy"):
+            dmarc_policy[row["dmarc_policy"]] += 1
     return {
         "domains_total": len(intel_rows),
         "resolved_domains": sum(1 for r in intel_rows if r.get("resolves")),
@@ -238,13 +260,23 @@ def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "wildcard_domains": sum(1 for r in intel_rows if r.get("is_wildcard")),
         "mail_enabled_domains": sum(1 for r in intel_rows if r.get("has_mx")),
         "spf_domains": sum(1 for r in intel_rows if r.get("has_spf")),
+        "multiple_spf_domains": sum(1 for r in intel_rows if r.get("spf_multiple")),
         "dmarc_domains": sum(1 for r in intel_rows if r.get("has_dmarc")),
+        "dmarc_policy": dict(sorted(dmarc_policy.items())),
         "mta_sts_domains": sum(1 for r in intel_rows if r.get("has_mta_sts")),
         "bimi_domains": sum(1 for r in intel_rows if r.get("has_bimi")),
         "dkim_domains": sum(1 for r in intel_rows if (r.get("dkim_txt_records") or 0) > 0),
         "caa_domains": sum(1 for r in intel_rows if r.get("has_caa")),
         "ipv4_domains": sum(1 for r in intel_rows if r.get("has_ipv4")),
         "ipv6_domains": sum(1 for r in intel_rows if r.get("has_ipv6")),
+        "dangling_cname_domains": sum(1 for r in intel_rows if r.get("dangling_cname")),
+        "tls_domains": sum(1 for r in intel_rows if r.get("web", {}).get("tls")),
+        "hsts_domains": sum(1 for r in intel_rows if r.get("web", {}).get("hsts")),
+        "hsts_preload_eligible_domains": sum(
+            1
+            for r in intel_rows
+            if (r.get("web", {}).get("hsts") or {}).get("preload_eligible")
+        ),
         "provider_hints": dict(sorted(providers.items())),
     }
 
@@ -252,7 +284,7 @@ def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
 async def _collect_scan_data(
     roots: set[str],
     progress_cb: Callable[[int, int, str], None] | None = None,
-) -> tuple[list[str], list[str], list[Any], list[Any]]:
+) -> tuple[list[str], list[str], list[Any], list[Any], dict[str, bool]]:
     all_domains: set[str] = set(roots)
     sorted_roots = sorted(roots)
     root_count = len(sorted_roots)
@@ -276,6 +308,24 @@ async def _collect_scan_data(
 
     dns_records = await asyncio.gather(*[dns_task(d) for d in resolvable_domains])
     dns_by_domain = {r.get("domain"): r for r in dns_records}
+    cname_targets = sorted(
+        {
+            target.rstrip(".").lower()
+            for rec in dns_records
+            for target in (rec.get("CNAME") or [])
+            if target
+        }
+    )
+    if progress_cb and cname_targets:
+        progress_cb(2, 6, f"Checking {len(cname_targets)} CNAME targets")
+
+    async def cname_task(target: str) -> tuple[str, bool]:
+        async with sem:
+            ips = await asyncio.to_thread(resolve_ips, target)
+            return target, bool(ips)
+
+    cname_results = await asyncio.gather(*[cname_task(t) for t in cname_targets])
+    cname_resolves = {target: ok for target, ok in cname_results}
     web_targets = [
         d
         for d in resolvable_domains
@@ -284,12 +334,12 @@ async def _collect_scan_data(
     if progress_cb:
         progress_cb(2, 6, f"Checking HTTP metadata for {len(web_targets)} domains")
     web_records = await asyncio.gather(*[fetch_http_metadata(d) for d in web_targets])
-    return domains_sorted, resolvable_domains, dns_records, web_records
+    return domains_sorted, resolvable_domains, dns_records, web_records, cname_resolves
 
 
 def _collect_scan_data_test_mode(
     roots: set[str],
-) -> tuple[list[str], list[str], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[str], list[str], list[dict[str, Any]], list[dict[str, Any]], dict[str, bool]]:
     domains_sorted = sorted({_normalize_domain(d) for d in roots})
     resolvable_domains = [d for d in domains_sorted if not d.startswith("*.")]
     dns_records: list[dict[str, Any]] = []
@@ -310,7 +360,7 @@ def _collect_scan_data_test_mode(
                 "PTR": {},
             }
         )
-    return domains_sorted, resolvable_domains, dns_records, []
+    return domains_sorted, resolvable_domains, dns_records, [], {}
 
 
 def _execute_scan(scan_id: int, roots: list[str]) -> None:
@@ -328,12 +378,24 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
         set_progress(1, 6, "Preparing scan")
         if _is_test_mode():
             set_progress(2, 6, "Collecting domains (test mode)")
-            domains_sorted, resolvable_domains, dns_records, web_records = _collect_scan_data_test_mode(
+            (
+                domains_sorted,
+                resolvable_domains,
+                dns_records,
+                web_records,
+                cname_resolves,
+            ) = _collect_scan_data_test_mode(
                 roots_set
             )
         else:
             set_progress(2, 6, "Collecting in-scope domains from CT")
-            domains_sorted, resolvable_domains, dns_records, web_records = asyncio.run(
+            (
+                domains_sorted,
+                resolvable_domains,
+                dns_records,
+                web_records,
+                cname_resolves,
+            ) = asyncio.run(
                 _collect_scan_data(roots_set, progress_cb=set_progress)
             )
 
@@ -409,6 +471,7 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
                     dns_by_domain.get(d, {}),
                     web_by_domain.get(d, {}),
                     asn_by_ip=asn_by_ip,
+                    cname_targets=cname_resolves,
                 )
                 for d in domains_sorted
             ]

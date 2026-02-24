@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
+import logoLight from "./assets/logo-light.png";
+import logoDark from "./assets/logo-dark.png";
 
 const ADD_CUSTOMER_OPTION = "__add_customer__";
 
@@ -105,6 +107,25 @@ function suggestInitialZoom(totalDomains, rootCount, maxLabelCap) {
     return Math.max(1.1, Math.min(1.54, maxLabelCap / (roots * 10)));
   }
   return 1.54;
+}
+
+function formatCertEntity(entity) {
+  if (!entity) return "-";
+  if (Array.isArray(entity)) {
+    return entity
+      .map((entry) =>
+        Array.isArray(entry)
+          ? entry.map((pair) => `${pair[0]}=${pair[1]}`).join(", ")
+          : String(entry)
+      )
+      .join(" / ");
+  }
+  if (typeof entity === "object") {
+    return Object.entries(entity)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(", ");
+  }
+  return String(entity);
 }
 
 function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
@@ -576,6 +597,13 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const ptrValues = hoveredNode?.dns?.PTR
     ? Object.values(hoveredNode.dns.PTR).flat().filter(Boolean)
     : [];
+  const securityHeaderKeys = nodeIntel?.web?.security_headers
+    ? Object.keys(nodeIntel.web.security_headers)
+    : [];
+  const fingerprints = nodeIntel?.web?.fingerprints || [];
+  const hsts = nodeIntel?.web?.hsts || null;
+  const tls = nodeIntel?.web?.tls || null;
+  const ipAsn = nodeIntel?.ip_asn || [];
 
   function focusNode(node, targetZoom = Math.max(zoom, 2.1)) {
     const z = clampZoom(Math.max(targetZoom, 2.5));
@@ -830,7 +858,22 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
           <div className="graph-help-bug">Ctrl + Scroll to zoom</div>
         </div>
 
-        <div className="graph-hover panel">
+        <div className={`graph-hover panel ${selectedNode ? "floating overlay" : ""}`}>
+          {selectedNode ? (
+            <div className="graph-hover-head">
+              <div>
+                <div className="muted">Details</div>
+                <div className="graph-hover-title">
+                  {hoveredNode?.domain || "Selection"}
+                </div>
+              </div>
+              <div className="graph-hover-actions">
+                <button className="ghost" onClick={() => setSelectedKey(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="graph-controls">
             <button className="ghost" onClick={() => setZoom((z) => clampZoom(z - 0.15))}>
               -
@@ -848,11 +891,6 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
             >
               Reset
             </button>
-            {selectedNode ? (
-              <button className="ghost" onClick={() => setSelectedKey(null)}>
-                Unpin
-              </button>
-            ) : null}
             <label className="graph-toggle muted">
               <input
                 type="checkbox"
@@ -862,7 +900,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
               Hide unreachable
             </label>
           </div>
-          <h3>{hoveredNode?.domain || "Details"}</h3>
+          {!selectedNode ? <h3>{hoveredNode?.domain || "Details"}</h3> : null}
           {selectedNode ? <div className="muted">Pinned selection</div> : null}
           <div className="muted">
             Type: {hoveredNode?.kind || "unknown"}
@@ -956,6 +994,21 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                     </span>
                   </div>
                   <div className="graph-record-row">
+                    <span>SPF records</span>
+                    <span>
+                      {nodeIntel.spf_txt_records ?? 0}
+                      {nodeIntel.spf_multiple ? " (multiple)" : ""}
+                    </span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>DMARC policy</span>
+                    <span>{nodeIntel.dmarc_policy || "-"}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>Dangling CNAME</span>
+                    <span>{nodeIntel.dangling_cname ? "possible" : "no"}</span>
+                  </div>
+                  <div className="graph-record-row">
                     <span>CDN / Proxy</span>
                     <span>
                       {nodeIntel.web?.is_cdn_or_proxy
@@ -984,6 +1037,110 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                       <span>Title</span>
                       <span>{nodeIntel.web.title}</span>
                     </div>
+                  ) : null}
+                  {securityHeaderKeys.length ? (
+                    <details className="graph-details">
+                      <summary>Security headers</summary>
+                      <div className="graph-chip-list">
+                        {securityHeaderKeys.map((k) => (
+                          <span key={`sec-${hoveredNode.key}-${k}`} className="graph-chip">
+                            {k}
+                          </span>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  {hsts && hsts.header ? (
+                    <details className="graph-details">
+                      <summary>HSTS</summary>
+                      <div className="graph-record-row">
+                        <span>Max-age</span>
+                        <span>{hsts.max_age ?? "-"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>IncludeSubDomains</span>
+                        <span>{hsts.include_subdomains ? "yes" : "no"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Preload</span>
+                        <span>{hsts.preload_directive ? "yes" : "no"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Preload eligible</span>
+                        <span>{hsts.preload_eligible ? "yes" : "no"}</span>
+                      </div>
+                    </details>
+                  ) : null}
+                  {tls && (tls.protocol || tls.cert) ? (
+                    <details className="graph-details">
+                      <summary>TLS certificate</summary>
+                      <div className="graph-record-row">
+                        <span>Protocol</span>
+                        <span>{tls.protocol || "-"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Cipher</span>
+                        <span>{tls.cipher || "-"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Valid from</span>
+                        <span>{tls.cert?.not_before ? formatDate(tls.cert.not_before) : "-"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Valid until</span>
+                        <span>{tls.cert?.not_after ? formatDate(tls.cert.not_after) : "-"}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Issuer</span>
+                        <span>{formatCertEntity(tls.cert?.issuer)}</span>
+                      </div>
+                      <div className="graph-record-row">
+                        <span>Subject</span>
+                        <span>{formatCertEntity(tls.cert?.subject)}</span>
+                      </div>
+                      {tls.cert?.san?.length ? (
+                        <div className="graph-list-block">
+                          <div className="muted">SANs</div>
+                          <div className="graph-chip-list">
+                            {tls.cert.san.slice(0, 10).map((san) => (
+                              <span key={`san-${hoveredNode.key}-${san}`} className="graph-chip">
+                                {san}
+                              </span>
+                            ))}
+                            {tls.cert.san.length > 10 ? (
+                              <span className="muted">+{tls.cert.san.length - 10} more</span>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </details>
+                  ) : null}
+                  {fingerprints.length ? (
+                    <details className="graph-details">
+                      <summary>Fingerprints</summary>
+                      <div className="graph-chip-list">
+                        {fingerprints.map((fp) => (
+                          <span key={`fp-${hoveredNode.key}-${fp}`} className="graph-chip">
+                            {fp}
+                          </span>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  {ipAsn.length ? (
+                    <details className="graph-details">
+                      <summary>ASN</summary>
+                      <div className="graph-records">
+                        {ipAsn.map((row) => (
+                          <div key={`asn-${hoveredNode.key}-${row.ip}`} className="graph-record-row">
+                            <span>{row.ip}</span>
+                            <span>
+                              {row.asn ? `AS${row.asn}` : "-"} {row.asn_description || ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                   ) : null}
                   {nodeIntel.provider_hints?.length ? (
                     <div className="graph-list-block">
@@ -1084,6 +1241,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [theme, setTheme] = useState("light");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [maxLabelCap, setMaxLabelCap] = useState(36);
 
   const [newCustomerName, setNewCustomerName] = useState("");
@@ -1091,6 +1249,12 @@ export default function App() {
   const [addDomainInput, setAddDomainInput] = useState("");
   const [renameInput, setRenameInput] = useState("");
   const [scanInFlight, setScanInFlight] = useState(false);
+  const [customerSectionOpen, setCustomerSectionOpen] = useState(
+    () => window.localStorage.getItem("asm.customer.open") !== "false"
+  );
+  const [scansSectionOpen, setScansSectionOpen] = useState(
+    () => window.localStorage.getItem("asm.scans.open") !== "false"
+  );
 
   const activeScan = useMemo(
     () => scans.find((s) => s.id === selectedScanId),
@@ -1190,6 +1354,7 @@ export default function App() {
     }
   }
 
+
   useEffect(() => {
     runWithStatus(loadCompanies);
   }, []);
@@ -1239,7 +1404,17 @@ export default function App() {
     <div className={`app theme-${theme}`}>
       <header className="topbar">
         <div className="brand">
-          <div className="brand-title">ASM Notebook</div>
+          <button
+            className="logo-button"
+            onClick={() => window.location.reload()}
+            aria-label="Refresh home"
+            type="button"
+          >
+            <span className="brand-logo">
+              <img className="logo logo-light" src={logoLight} alt="ASM Notebook" />
+              <img className="logo logo-dark" src={logoDark} alt="ASM Notebook" />
+            </span>
+          </button>
           <div className="brand-sub">
             Passive attack surface inventory and scan history
           </div>
@@ -1340,7 +1515,7 @@ export default function App() {
             </div>
           ) : (
             <>
-              <section className="card">
+              <section className={`card ${customerSectionOpen ? "" : "collapsed"}`}>
                 <div className="card-header">
                   <div>
                     <h1>{activeCompany.name}</h1>
@@ -1349,6 +1524,22 @@ export default function App() {
                     </div>
                   </div>
                   <div className="actions">
+                    <button
+                      className="ghost"
+                      onClick={() => {
+                        const next = !customerSectionOpen;
+                        setCustomerSectionOpen(next);
+                        window.localStorage.setItem("asm.customer.open", String(next));
+                      }}
+                    >
+                      {customerSectionOpen ? "Minimize" : "Expand"}
+                    </button>
+                    <button
+                      className="ghost"
+                      onClick={() => setCustomerModalOpen(true)}
+                    >
+                      Manage details
+                    </button>
                     <button
                       disabled={scanBlocked}
                       onClick={() =>
@@ -1411,76 +1602,11 @@ export default function App() {
                   </div>
                 ) : null}
 
-                <div className="manage-panels">
-                  <details className="panel mini">
-                    <summary>Rename customer</summary>
-                    <div className="row">
-                      <input
-                        value={renameInput}
-                        onChange={(e) => setRenameInput(e.target.value)}
-                      />
-                      <button
-                        onClick={() =>
-                          runWithStatus(async () => {
-                            await api.updateCompany(activeCompany.slug, {
-                              name: renameInput,
-                            });
-                            await loadCompany(activeCompany.slug);
-                          })
-                        }
-                      >
-                        Save
-                      </button>
-                    </div>
-                  </details>
-
-                  <details className="panel mini">
-                    <summary>Domains ({activeCompany.domains.length})</summary>
-                    <div className="domain-list">
-                      {activeCompany.domains.map((domain) => (
-                        <div key={domain} className="domain-item domain-row">
-                          <span>{domain}</span>
-                          <button
-                            className="danger ghost domain-delete"
-                            onClick={() =>
-                              runWithStatus(async () => {
-                                await removeDomainFromCompany(domain);
-                              })
-                            }
-                            title={`Delete ${domain}`}
-                            aria-label={`Delete ${domain}`}
-                          >
-                            🗑
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                    <label>
-                      Add domain
-                      <input
-                        value={addDomainInput}
-                        onChange={(e) => setAddDomainInput(e.target.value)}
-                        placeholder="new.example.com"
-                      />
-                    </label>
-                    <button
-                      onClick={() =>
-                        runWithStatus(async () => {
-                          if (!activeCompany) return;
-                          const nextDomain = normalizeDomain(addDomainInput);
-                          if (!nextDomain) throw new Error("Domain is required");
-                          const domains = Array.from(
-                            new Set([...activeCompany.domains, nextDomain])
-                          );
-                          await api.replaceDomains(activeCompany.slug, domains);
-                          await loadCompany(activeCompany.slug);
-                        })
-                      }
-                    >
-                      Add domain
-                    </button>
-                  </details>
-                </div>
+                {customerSectionOpen ? (
+                  <div className="muted">
+                    Use “Manage details” to rename the customer or edit domains.
+                  </div>
+                ) : null}
               </section>
 
               <section className="card">
@@ -1492,6 +1618,16 @@ export default function App() {
                     </div>
                   </div>
                   <div className="actions">
+                    <button
+                      className="ghost"
+                      onClick={() => {
+                        const next = !scansSectionOpen;
+                        setScansSectionOpen(next);
+                        window.localStorage.setItem("asm.scans.open", String(next));
+                      }}
+                    >
+                      {scansSectionOpen ? "Minimize" : "Expand"}
+                    </button>
                     <button
                       disabled={scanBlocked}
                       onClick={() =>
@@ -1517,110 +1653,114 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="scan-stack">
-                  <div className={`scan-list ${artifacts ? "blurred" : ""}`}>
-                    {scans.length === 0 ? (
-                      <div className="empty empty-with-action">
-                        <span>No scans yet</span>
-                        <button
-                          disabled={scanBlocked}
-                          onClick={() =>
-                            runWithStatus(async () => {
-                              await startScan(activeCompany.slug);
-                            })
-                          }
-                        >
-                          Start first scan
-                        </button>
-                      </div>
-                    ) : (
-                      scans.map((scan) => (
-                        <div
-                          key={scan.id}
-                          className={
-                            scan.id === selectedScanId ? "scan active" : "scan"
-                          }
-                        >
-                          <div className="scan-main">
-                            <div className="scan-title">
-                              #{scan.company_scan_number}
-                            </div>
-                            <div className="scan-meta">
-                              {scan.status} · completed {formatDate(scan.completed_at)}
-                              {scan.notes ? ` · ${scan.notes}` : ""}
-                            </div>
-                          </div>
-                          <div className="scan-actions">
-                            <button
-                              className="ghost"
-                              onClick={() =>
-                                runWithStatus(async () => {
-                                  setSelectedScanId(scan.id);
-                                  await loadArtifacts(activeCompany.slug, scan.id);
-                                })
-                              }
-                            >
-                              View
-                            </button>
-                            <button
-                              className="danger ghost"
-                              onClick={() =>
-                                runWithStatus(async () => {
-                                  if (
-                                    !confirm(
-                                      `Delete scan id ${scan.id} for ${activeCompany.slug}?`
-                                    )
-                                  ) {
-                                    return;
-                                  }
-                                  await api.deleteScan(activeCompany.slug, scan.id);
-                                  setSelectedScanId(null);
-                                  setArtifacts(null);
-                                  await loadCompany(activeCompany.slug);
-                                })
-                              }
-                            >
-                              Delete
-                            </button>
-                          </div>
+                {scansSectionOpen ? (
+                  <div className="scan-stack">
+                    <div className={`scan-list ${artifacts ? "blurred" : ""}`}>
+                      {scans.length === 0 ? (
+                        <div className="empty empty-with-action">
+                          <span>No scans yet</span>
+                          <button
+                            disabled={scanBlocked}
+                            onClick={() =>
+                              runWithStatus(async () => {
+                                await startScan(activeCompany.slug);
+                              })
+                            }
+                          >
+                            Start first scan
+                          </button>
                         </div>
-                      ))
-                    )}
-                  </div>
-                  {artifacts ? (
-                    <div className="artifact-overlay">
-                      <div className="artifact-header">
-                        <div>
-                          <h3>Artifacts</h3>
-                          <div className="muted">
-                            {activeScan
-                              ? `Scan #${activeScan.company_scan_number}`
-                              : "Selected scan"}
+                      ) : (
+                        scans.map((scan) => (
+                          <div
+                            key={scan.id}
+                            className={
+                              scan.id === selectedScanId ? "scan active" : "scan"
+                            }
+                          >
+                            <div className="scan-main">
+                              <div className="scan-title">
+                                #{scan.company_scan_number}
+                              </div>
+                              <div className="scan-meta">
+                                {scan.status} · completed {formatDate(scan.completed_at)}
+                                {scan.notes ? ` · ${scan.notes}` : ""}
+                              </div>
+                            </div>
+                            <div className="scan-actions">
+                              <button
+                                className="ghost"
+                                onClick={() =>
+                                  runWithStatus(async () => {
+                                    setSelectedScanId(scan.id);
+                                    await loadArtifacts(activeCompany.slug, scan.id);
+                                  })
+                                }
+                              >
+                                View
+                              </button>
+                              <button
+                                className="danger ghost"
+                                onClick={() =>
+                                  runWithStatus(async () => {
+                                    if (
+                                      !confirm(
+                                        `Delete scan id ${scan.id} for ${activeCompany.slug}?`
+                                      )
+                                    ) {
+                                      return;
+                                    }
+                                    await api.deleteScan(activeCompany.slug, scan.id);
+                                    setSelectedScanId(null);
+                                    setArtifacts(null);
+                                    await loadCompany(activeCompany.slug);
+                                  })
+                                }
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                        <button
-                          className="ghost"
-                          onClick={() => {
-                            setSelectedScanId(null);
-                            setArtifacts(null);
-                          }}
-                        >
-                          Close
-                        </button>
-                      </div>
-                      <DomainRelationshipGraph
-                        artifacts={artifacts}
-                        maxLabelCap={maxLabelCap}
-                      />
-                      <details>
-                        <summary className="muted">Raw JSON artifacts</summary>
-                        <pre className="code">
-                          {JSON.stringify(artifacts, null, 2)}
-                        </pre>
-                      </details>
+                        ))
+                      )}
                     </div>
-                  ) : null}
-                </div>
+                    {artifacts ? (
+                      <div className="artifact-overlay">
+                        <div className="artifact-header">
+                          <div>
+                            <h3>Artifacts</h3>
+                            <div className="muted">
+                              {activeScan
+                                ? `Scan #${activeScan.company_scan_number}`
+                                : "Selected scan"}
+                            </div>
+                          </div>
+                          <button
+                            className="ghost"
+                            onClick={() => {
+                              setSelectedScanId(null);
+                              setArtifacts(null);
+                            }}
+                          >
+                            Close
+                          </button>
+                        </div>
+                        <DomainRelationshipGraph
+                          artifacts={artifacts}
+                          maxLabelCap={maxLabelCap}
+                        />
+                        <details>
+                          <summary className="muted">Raw JSON artifacts</summary>
+                          <pre className="code">
+                            {JSON.stringify(artifacts, null, 2)}
+                          </pre>
+                        </details>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="muted">Section minimized</div>
+                )}
               </section>
             </>
           )}
@@ -1661,6 +1801,91 @@ export default function App() {
                   onChange={(e) => setMaxLabelCap(Number(e.target.value))}
                 />
               </label>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {customerModalOpen && activeCompany ? (
+        <div className="modal-backdrop" onClick={() => setCustomerModalOpen(false)}>
+          <div className="modal-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <div>
+                <h2>Customer details</h2>
+                <div className="muted">{activeCompany.slug}</div>
+              </div>
+              <button className="ghost" onClick={() => setCustomerModalOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="manage-panels">
+              <details className="panel mini" open>
+                <summary>Rename customer</summary>
+                <div className="row">
+                  <input
+                    value={renameInput}
+                    onChange={(e) => setRenameInput(e.target.value)}
+                  />
+                  <button
+                    onClick={() =>
+                      runWithStatus(async () => {
+                        await api.updateCompany(activeCompany.slug, {
+                          name: renameInput,
+                        });
+                        await loadCompany(activeCompany.slug);
+                      })
+                    }
+                  >
+                    Save
+                  </button>
+                </div>
+              </details>
+
+              <details className="panel mini" open>
+                <summary>Domains ({activeCompany.domains.length})</summary>
+                <div className="domain-list">
+                  {activeCompany.domains.map((domain) => (
+                    <div key={domain} className="domain-item domain-row">
+                      <span>{domain}</span>
+                      <button
+                        className="danger ghost domain-delete"
+                        onClick={() =>
+                          runWithStatus(async () => {
+                            await removeDomainFromCompany(domain);
+                          })
+                        }
+                        title={`Delete ${domain}`}
+                        aria-label={`Delete ${domain}`}
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <label>
+                  Add domain
+                  <input
+                    value={addDomainInput}
+                    onChange={(e) => setAddDomainInput(e.target.value)}
+                    placeholder="new.example.com"
+                  />
+                </label>
+                <button
+                  onClick={() =>
+                    runWithStatus(async () => {
+                      if (!activeCompany) return;
+                      const nextDomain = normalizeDomain(addDomainInput);
+                      if (!nextDomain) throw new Error("Domain is required");
+                      const domains = Array.from(
+                        new Set([...activeCompany.domains, nextDomain])
+                      );
+                      await api.replaceDomains(activeCompany.slug, domains);
+                      await loadCompany(activeCompany.slug);
+                    })
+                  }
+                >
+                  Add domain
+                </button>
+              </details>
             </div>
           </div>
         </div>
