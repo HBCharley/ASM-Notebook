@@ -38,6 +38,17 @@ async def fetch_http_metadata(domain: str) -> Dict[str, Any]:
                 ):
                     if k in resp.headers:
                         interesting[k] = resp.headers.get(k, "")
+                security_headers = {}
+                for k in (
+                    "strict-transport-security",
+                    "content-security-policy",
+                    "x-frame-options",
+                    "x-content-type-options",
+                    "referrer-policy",
+                    "permissions-policy",
+                ):
+                    if k in resp.headers:
+                        security_headers[k] = resp.headers.get(k, "")
                 return {
                     "domain": domain,
                     "reachable": True,
@@ -46,6 +57,7 @@ async def fetch_http_metadata(domain: str) -> Dict[str, Any]:
                     "status_code": resp.status_code,
                     "title": title,
                     "headers": interesting,
+                    "security_headers": security_headers,
                 }
             except Exception as e:
                 last_error = str(e)
@@ -56,4 +68,3 @@ async def fetch_http_metadata(domain: str) -> Dict[str, Any]:
         "reachable": False,
         "error": last_error[:250] if last_error else "request_failed",
     }
-

@@ -55,6 +55,7 @@ body {
   position: sticky;
   top: 0;
   z-index: 10;
+  gap: 18px;
 }
 
 .brand-title {
@@ -67,6 +68,36 @@ body {
   font-size: 14px;
   color: var(--muted);
   margin-top: 6px;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  justify-content: center;
+  min-width: 320px;
+  flex-wrap: wrap;
+}
+
+.header-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 220px;
+}
+
+.header-create {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.header-create label {
+  min-width: 160px;
 }
 
 .status {
@@ -111,7 +142,7 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 1fr;
   gap: 24px;
   padding: 24px 32px 40px;
 }
@@ -278,11 +309,41 @@ button.danger.ghost {
   gap: 16px;
 }
 
+.manage-panels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 14px;
   background: var(--card);
+}
+
+.panel.mini {
+  min-width: 240px;
+  max-width: 420px;
+  flex: 1;
+}
+
+.panel.mini summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+  list-style: none;
+}
+
+.panel.mini summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel.mini[open] summary {
+  margin-bottom: 10px;
 }
 
 .row {
@@ -296,6 +357,36 @@ button.danger.ghost {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.scan-list.blurred {
+  filter: blur(3px);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.scan-stack {
+  position: relative;
+  min-height: 240px;
+}
+
+.artifact-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+
+.artifact-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .scan {
@@ -383,10 +474,22 @@ button.danger.ghost {
 .scan-progress-fill {
   position: absolute;
   inset: 0;
-  width: 35%;
   border-radius: 999px;
   background: linear-gradient(90deg, #2d5bff 0%, #6f90ff 100%);
+}
+
+.scan-progress-fill.indeterminate {
+  width: 35%;
   animation: scanProgress 1.3s ease-in-out infinite;
+}
+
+.scan-progress-fill.determinate {
+  animation: none;
+  transform: translateX(0);
+}
+
+.scan-progress-message {
+  margin-bottom: 8px;
 }
 
 @keyframes scanProgress {
@@ -537,6 +640,10 @@ button.danger.ghost {
   background: color-mix(in srgb, var(--accent) 13%, transparent);
 }
 
+.tree-item-unreachable {
+  border-style: dashed;
+}
+
 .tree-count {
   font-family: var(--mono);
   font-size: 10px;
@@ -570,6 +677,34 @@ button.danger.ghost {
   cursor: grab;
   user-select: none;
   overscroll-behavior: contain;
+}
+
+@media (min-width: 1400px) {
+  .layout {
+    grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  }
+
+  .graph-grid {
+    grid-template-columns: 3fr 1fr;
+  }
+
+  .domain-graph {
+    min-height: 460px;
+  }
+
+  .graph-tree {
+    width: min(420px, calc(100% - 20px));
+  }
+}
+
+@media (min-width: 1800px) {
+  .graph-grid {
+    grid-template-columns: 4fr 1fr;
+  }
+
+  .domain-graph {
+    min-height: 540px;
+  }
 }
 
 .domain-graph.dragging {
@@ -616,6 +751,10 @@ button.danger.ghost {
   fill: #111111;
 }
 
+.graph-node-unreachable circle {
+  fill: #c2572a;
+}
+
 .graph-node-aggregate circle {
   fill: #9f7a43;
 }
@@ -645,8 +784,15 @@ button.danger.ghost {
 .graph-controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.graph-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .spoke-list {
@@ -761,6 +907,12 @@ button.danger.ghost {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+  }
+
+  .header-controls {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .graph-grid {

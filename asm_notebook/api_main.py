@@ -6,9 +6,10 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -18,8 +19,30 @@ from .models import Company, CompanyDomain, ScanArtifact, ScanRun
 from .plugins.ct import ct_subdomains
 from .plugins.dns import resolve_dns
 from .plugins.http_meta import fetch_http_metadata
+from .plugins.ip_intel import lookup_asn_for_ips
 
 app = FastAPI(title="ASM Notebook API")
+
+
+def _cors_origins() -> list[str]:
+    raw = os.getenv("ASM_CORS_ALLOW_ORIGINS", "").strip()
+    if raw:
+        return [o.strip() for o in raw.split(",") if o.strip()]
+    return [
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+    ]
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class CompanyCreate(BaseModel):
@@ -151,15 +174,26 @@ def _edge_and_server(domain: str, rec: dict[str, Any], web: dict[str, Any] | Non
 
 
 def _domain_intel(
-    domain: str, roots: set[str], rec: dict[str, Any], web: dict[str, Any] | None
+    domain: str,
+    roots: set[str],
+    rec: dict[str, Any],
+    web: dict[str, Any] | None,
+    asn_by_ip: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     d = _normalize_domain(domain)
     root = next((r for r in sorted(roots) if d == r or d.endswith("." + r)), None)
     txt = [str(t).lower() for t in (rec.get("TXT") or [])]
     ips = rec.get("ips") or []
+    asn_by_ip = asn_by_ip or {}
+    ip_asn = [asn_by_ip[ip] for ip in ips if ip in asn_by_ip]
     has_ipv4 = any("." in ip for ip in ips)
     has_ipv6 = any(":" in ip for ip in ips)
     edge = _edge_and_server(domain, rec, web)
+    has_spf = any("v=spf1" in t for t in txt)
+    has_dmarc = any("v=dmarc1" in t for t in txt)
+    has_mta_sts = any("v=stsv1" in t for t in txt)
+    has_bimi = any("v=bimi1" in t for t in txt)
+    dkim_records = [t for t in txt if "v=dkim1" in t]
     return {
         "domain": domain,
         "root": root,
@@ -172,9 +206,13 @@ def _domain_intel(
         "has_ipv6": has_ipv6,
         "has_cname": bool(rec.get("CNAME")),
         "has_mx": bool(rec.get("MX")),
-        "has_spf": any("v=spf1" in t for t in txt),
-        "has_dmarc": any("v=dmarc1" in t for t in txt),
+        "has_spf": has_spf,
+        "has_dmarc": has_dmarc,
+        "has_mta_sts": has_mta_sts,
+        "has_bimi": has_bimi,
+        "dkim_txt_records": len(dkim_records),
         "has_caa": bool(rec.get("CAA")),
+        "ip_asn": ip_asn,
         "provider_hints": _provider_hints(rec),
         "web": {
             "reachable": bool((web or {}).get("reachable")),
@@ -182,6 +220,7 @@ def _domain_intel(
             "status_code": (web or {}).get("status_code"),
             "final_url": (web or {}).get("final_url", ""),
             "title": (web or {}).get("title", ""),
+            "security_headers": (web or {}).get("security_headers") or {},
             **edge,
         },
     }
@@ -200,6 +239,9 @@ def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "mail_enabled_domains": sum(1 for r in intel_rows if r.get("has_mx")),
         "spf_domains": sum(1 for r in intel_rows if r.get("has_spf")),
         "dmarc_domains": sum(1 for r in intel_rows if r.get("has_dmarc")),
+        "mta_sts_domains": sum(1 for r in intel_rows if r.get("has_mta_sts")),
+        "bimi_domains": sum(1 for r in intel_rows if r.get("has_bimi")),
+        "dkim_domains": sum(1 for r in intel_rows if (r.get("dkim_txt_records") or 0) > 0),
         "caa_domains": sum(1 for r in intel_rows if r.get("has_caa")),
         "ipv4_domains": sum(1 for r in intel_rows if r.get("has_ipv4")),
         "ipv6_domains": sum(1 for r in intel_rows if r.get("has_ipv6")),
@@ -207,21 +249,30 @@ def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-async def _collect_scan_data(roots: set[str]) -> tuple[list[str], list[str], list[Any], list[Any]]:
+async def _collect_scan_data(
+    roots: set[str],
+    progress_cb: Callable[[int, int, str], None] | None = None,
+) -> tuple[list[str], list[str], list[Any], list[Any]]:
     all_domains: set[str] = set(roots)
-    for root in roots:
+    sorted_roots = sorted(roots)
+    root_count = len(sorted_roots)
+    for idx, root in enumerate(sorted_roots, start=1):
+        if progress_cb:
+            progress_cb(2, 6, f"Collecting CT for {root} ({idx}/{root_count})")
         subs = await ct_subdomains(root)
         all_domains |= subs
 
     scoped = {d for d in all_domains if _in_scope(d, roots)}
     domains_sorted = sorted(scoped)
     resolvable_domains = [d for d in domains_sorted if not d.startswith("*.")]
+    if progress_cb:
+        progress_cb(2, 6, f"Resolving DNS for {len(resolvable_domains)} domains")
 
     sem = asyncio.Semaphore(25)
 
     async def dns_task(d: str) -> Any:
         async with sem:
-            return resolve_dns(d)
+            return await asyncio.to_thread(resolve_dns, d)
 
     dns_records = await asyncio.gather(*[dns_task(d) for d in resolvable_domains])
     dns_by_domain = {r.get("domain"): r for r in dns_records}
@@ -230,6 +281,8 @@ async def _collect_scan_data(roots: set[str]) -> tuple[list[str], list[str], lis
         for d in resolvable_domains
         if (dns_by_domain.get(d, {}).get("ips") or dns_by_domain.get(d, {}).get("CNAME"))
     ]
+    if progress_cb:
+        progress_cb(2, 6, f"Checking HTTP metadata for {len(web_targets)} domains")
     web_records = await asyncio.gather(*[fetch_http_metadata(d) for d in web_targets])
     return domains_sorted, resolvable_domains, dns_records, web_records
 
@@ -281,7 +334,7 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
         else:
             set_progress(2, 6, "Collecting in-scope domains from CT")
             domains_sorted, resolvable_domains, dns_records, web_records = asyncio.run(
-                _collect_scan_data(roots_set)
+                _collect_scan_data(roots_set, progress_cb=set_progress)
             )
 
         set_progress(3, 6, "Persisting domains and DNS artifacts")
@@ -346,8 +399,17 @@ def _execute_scan(scan_id: int, roots: list[str]) -> None:
             set_progress(5, 6, "Computing intel summary")
             dns_by_domain = {r.get("domain"): r for r in dns_records}
             web_by_domain = {w.get("domain"): w for w in web_records}
+            unique_ips = sorted({ip for rec in dns_records for ip in rec.get("ips", [])})
+            set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
+            asn_by_ip = lookup_asn_for_ips(unique_ips)
             intel_rows = [
-                _domain_intel(d, roots_set, dns_by_domain.get(d, {}), web_by_domain.get(d, {}))
+                _domain_intel(
+                    d,
+                    roots_set,
+                    dns_by_domain.get(d, {}),
+                    web_by_domain.get(d, {}),
+                    asn_by_ip=asn_by_ip,
+                )
                 for d in domains_sorted
             ]
             upsert_artifact(

@@ -10,6 +10,47 @@ function formatDate(value) {
   return d.toLocaleString();
 }
 
+function parseScanProgress(scan) {
+  if (!scan) {
+    return null;
+  }
+  const notes = (scan.notes || "").trim();
+  const status = (scan.status || "").toLowerCase();
+  const m = notes.match(/^(\d+)\s*\/\s*(\d+)\s*(.*)$/);
+  if (m) {
+    const step = Number(m[1]);
+    const total = Number(m[2]);
+    const message = (m[3] || "").trim();
+    if (Number.isFinite(step) && Number.isFinite(total) && total > 0) {
+      let percent = Math.round((step / total) * 100);
+      if (status === "running") {
+        percent = Math.min(percent, 98);
+      }
+      percent = Math.max(0, Math.min(100, percent));
+      return {
+        percent,
+        message: message || notes,
+        indeterminate: false,
+      };
+    }
+  }
+  if (status === "success") {
+    return {
+      percent: 100,
+      message: notes || "Scan complete",
+      indeterminate: false,
+    };
+  }
+  if (status === "running") {
+    return {
+      percent: 20,
+      message: notes || "Running scan...",
+      indeterminate: true,
+    };
+  }
+  return null;
+}
+
 function normalizeDomain(input) {
   return input
     .trim()
@@ -70,13 +111,31 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const [hoveredKey, setHoveredKey] = useState(null);
   const [selectedKey, setSelectedKey] = useState(null);
   const [treeOpen, setTreeOpen] = useState(false);
+  const [hideUnreachable, setHideUnreachable] = useState(false);
   const [expandedRoots, setExpandedRoots] = useState({});
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState(null);
   const [graphEl, setGraphEl] = useState(null);
+  const intelByDomain = useMemo(
+    () =>
+      new Map(
+        (artifacts?.dns_intel?.domains || []).map((row) => [row.domain, row])
+      ),
+    [artifacts]
+  );
+  const unreachableDomains = useMemo(
+    () =>
+      new Set(
+        (artifacts?.dns_intel?.domains || [])
+          .filter((row) => row?.domain && !row?.web?.reachable)
+          .map((row) => row.domain)
+      ),
+    [artifacts]
+  );
   const graph = useMemo(() => {
+    const unreachableRootLabel = "Unreachable";
     const roots = Array.from(new Set(artifacts?.domains?.roots || []));
     const allDomains = Array.from(
       new Set([...(artifacts?.domains?.domains || []), ...roots])
@@ -104,6 +163,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
         key: `root:${root}`,
         domain: root,
         kind: "root",
+        isUnreachableBucket: false,
         x: cx + Math.cos(angle) * 78,
         y: cy + Math.sin(angle) * 78,
       };
@@ -112,9 +172,14 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     const grouped = new Map();
     roots.forEach((r) => grouped.set(r, []));
     const unscoped = [];
+    const unreachable = [];
 
     allDomains.forEach((domain) => {
       if (roots.includes(domain)) return;
+      if (hideUnreachable && unreachableDomains.has(domain)) {
+        unreachable.push(domain);
+        return;
+      }
       const parent = roots.find((r) => isInRootScope(domain, r));
       if (parent) {
         grouped.get(parent).push(domain);
@@ -179,6 +244,38 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       domainNodes.push(node);
     });
 
+    if (hideUnreachable && unreachable.length) {
+      const unreachableRoot = {
+        key: `root:${unreachableRootLabel}`,
+        domain: unreachableRootLabel,
+        kind: "root",
+        isUnreachableBucket: true,
+        x: cx + 236,
+        y: cy,
+      };
+      rootNodes.push(unreachableRoot);
+      unreachable.sort((a, b) => a.localeCompare(b));
+      unreachable.forEach((domain, idx) => {
+        const base = (Math.PI * 2 * idx) / Math.max(unreachable.length, 1) - Math.PI / 2;
+        const radius = 52 + (idx % 4) * 14 + Math.floor(idx / 4) * 5;
+        const node = {
+          key: `domain:${domain}`,
+          domain,
+          kind: "domain",
+          root: unreachableRootLabel,
+          x: unreachableRoot.x + Math.cos(base) * radius,
+          y: unreachableRoot.y + Math.sin(base) * radius,
+          unreachable: true,
+        };
+        domainNodes.push(node);
+        edges.push({
+          key: `edge:${unreachableRootLabel}->${domain}`,
+          from: unreachableRootLabel,
+          to: domain,
+        });
+      });
+    }
+
     const nodeMap = new Map(
       [...rootNodes, ...domainNodes].map((n) => [n.domain, n])
     );
@@ -220,17 +317,23 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       counts: {
         roots: roots.length,
         domains: allDomains.length,
+        unreachable: hideUnreachable ? unreachable.length : 0,
       },
     };
-  }, [artifacts]);
-
-  if (!graph) {
-    return <div className="empty">No graphable domain artifacts for this scan</div>;
-  }
+  }, [artifacts, hideUnreachable, unreachableDomains]);
 
   function clampZoom(value) {
     return Math.max(0.7, Math.min(4.2, +value.toFixed(2)));
   }
+
+  const graphNodes = graph?.nodes ?? [];
+  const graphCounts = graph?.counts ?? { roots: 0, domains: 0, unreachable: 0 };
+  const graphWidth = graph?.width ?? 920;
+  const graphHeight = graph?.height ?? 520;
+  const hubNode = graph ? graphNodes.find((n) => n.kind === "hub") : null;
+  const rootNodes = graph ? graphNodes.filter((n) => n.kind === "root") : [];
+  const domainNodes = graph ? graphNodes.filter((n) => n.kind === "domain") : [];
+  const detailMode = zoom < 1.1 ? "overview" : zoom < 1.55 ? "focused" : "full";
 
   useEffect(() => {
     if (!graphEl) return;
@@ -268,15 +371,11 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     setDragStart(null);
   }
 
-  const hubNode = graph.nodes.find((n) => n.kind === "hub");
-  const rootNodes = graph.nodes.filter((n) => n.kind === "root");
-  const domainNodes = graph.nodes.filter((n) => n.kind === "domain");
-  const detailMode = zoom < 1.1 ? "overview" : zoom < 1.55 ? "focused" : "full";
-
   useEffect(() => {
+    if (!graph) return;
     const suggested = suggestInitialZoom(
-      graph.counts.domains,
-      graph.counts.roots,
+      graphCounts.domains,
+      graphCounts.roots,
       maxLabelCap
     );
     setZoom(suggested);
@@ -300,13 +399,17 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const sortedRoots = rootNodes
     .slice()
     .sort((a, b) => a.domain.localeCompare(b.domain));
+  const scopedRoots = sortedRoots.filter((r) => !r.isUnreachableBucket);
+  const unreachableRootNode = sortedRoots.find((r) => r.isUnreachableBucket) || null;
 
-  const renderNodes = [hubNode, ...rootNodes];
-  const renderEdges = rootNodes.map((root) => ({
-    key: `edge:${hubNode.key}->${root.key}`,
-    fromKey: hubNode.key,
-    toKey: root.key,
-  }));
+  const renderNodes = hubNode ? [hubNode, ...rootNodes] : [...rootNodes];
+  const renderEdges = hubNode
+    ? rootNodes.map((root) => ({
+        key: `edge:${hubNode.key}->${root.key}`,
+        fromKey: hubNode.key,
+        toKey: root.key,
+      }))
+    : [];
 
   if (detailMode === "full") {
     for (const d of domainNodes) {
@@ -361,7 +464,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
 
   const renderNodeMap = new Map(renderNodes.map((n) => [n.key, n]));
   const selectedGlobalNode =
-    graph.nodes.find((n) => n.key === selectedKey) ||
+    graphNodes.find((n) => n.key === selectedKey) ||
     (selectedKey?.startsWith("aggregate:")
       ? { kind: "aggregate", root: selectedKey.replace("aggregate:", "") }
       : null);
@@ -463,19 +566,12 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   );
   const selectedNode =
     (selectedKey && displayNodeMap.get(selectedKey)) ||
-    graph.nodes.find((n) => n.key === selectedKey) ||
+    graphNodes.find((n) => n.key === selectedKey) ||
     null;
   const hoveredNode =
     selectedNode || displayNodeMap.get(hoveredKey) || hubNode;
   const dnsSummary = artifacts?.dns?.summary || null;
   const intelSummary = artifacts?.dns_intel?.summary || null;
-  const intelByDomain = useMemo(
-    () =>
-      new Map(
-        (artifacts?.dns_intel?.domains || []).map((row) => [row.domain, row])
-      ),
-    [artifacts]
-  );
   const nodeIntel = hoveredNode?.domain ? intelByDomain.get(hoveredNode.domain) : null;
   const ptrValues = hoveredNode?.dns?.PTR
     ? Object.values(hoveredNode.dns.PTR).flat().filter(Boolean)
@@ -485,8 +581,8 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     const z = clampZoom(Math.max(targetZoom, 2.5));
     setZoom(z);
     setPan({
-      x: -z * (node.x - graph.width / 2),
-      y: -z * (node.y - graph.height / 2),
+      x: -z * (node.x - graphWidth / 2),
+      y: -z * (node.y - graphHeight / 2),
     });
     setSelectedKey(node.key);
   }
@@ -511,16 +607,24 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
 
   useEffect(() => {
     const nextExpanded = {};
-    sortedRoots.slice(0, 2).forEach((root) => {
+    scopedRoots.slice(0, 2).forEach((root) => {
       nextExpanded[root.domain] = true;
     });
+    if (unreachableRootNode) {
+      nextExpanded[unreachableRootNode.domain] = true;
+    }
     setExpandedRoots(nextExpanded);
-  }, [artifacts]);
+  }, [artifacts, hideUnreachable]);
+
+  if (!graph || !hubNode) {
+    return <div className="empty">No graphable domain artifacts for this scan</div>;
+  }
 
   return (
     <div className="graph-wrap">
       <div className="graph-meta muted">
-        {graph.counts.roots} roots · {graph.counts.domains} domains · mode: {detailMode} · labels: {maxLabelCap}
+        {graphCounts.roots} roots · {graphCounts.domains} domains · mode: {detailMode} · labels: {maxLabelCap}
+        {hideUnreachable ? ` · unreachable bucket: ${graphCounts.unreachable}` : ""}
       </div>
       <div className="graph-grid">
         <div className="graph-canvas">
@@ -536,7 +640,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
               <div className="graph-tree-head">
                 <strong>Scope Browser</strong>
                 <span className="muted">
-                  {graph.counts.roots} roots · {graph.counts.domains} domains
+                  {graphCounts.roots} roots · {graphCounts.domains} domains
                 </span>
               </div>
               <button
@@ -546,7 +650,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                 Scan Scope
               </button>
               <div className="tree-section muted">Roots</div>
-              {sortedRoots.map((root) => {
+              {scopedRoots.map((root) => {
                 const rootDomains = domainsByRoot.get(root.domain) || [];
                 const isOpen = !!expandedRoots[root.domain];
                 return (
@@ -587,6 +691,47 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                   </div>
                 );
               })}
+              {unreachableRootNode ? (
+                <>
+                  <div className="tree-section muted">Unreachable</div>
+                  <div className="tree-branch">
+                    <button
+                      className={`tree-item tree-item-root tree-item-unreachable ${selectedKey === unreachableRootNode.key ? "active" : ""}`}
+                      onClick={() => {
+                        toggleRoot(unreachableRootNode.domain);
+                        selectFromTree(unreachableRootNode);
+                      }}
+                    >
+                      <span>
+                        {!!expandedRoots[unreachableRootNode.domain] ? "▾" : "▸"} {unreachableRootNode.domain}
+                      </span>
+                      <span className="tree-count">
+                        {(domainsByRoot.get(unreachableRootNode.domain) || []).length}
+                      </span>
+                    </button>
+                    {!!expandedRoots[unreachableRootNode.domain] ? (
+                      <div className="tree-children">
+                        {(domainsByRoot.get(unreachableRootNode.domain) || []).map((domainNode) => {
+                          const domainIntel = intelByDomain.get(domainNode.domain);
+                          return (
+                            <button
+                              key={`tree-unreachable-${domainNode.domain}`}
+                              className={`tree-item tree-item-domain ${selectedKey === domainNode.key ? "active" : ""}`}
+                              onClick={() => selectFromTree(domainNode)}
+                            >
+                              <span className="tree-domain-name">{domainNode.domain}</span>
+                              <span className="tree-domain-props">
+                                {domainIntel?.resolves ? "DNS" : "No DNS"}
+                                {domainIntel?.web?.reachable ? ` · HTTP ${domainIntel.web.status_code ?? "-"}` : " · unreachable"}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
               {unscopedDomains.length ? (
                 <>
                   <div className="tree-section muted">Unscoped</div>
@@ -615,7 +760,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
           <svg
             ref={setGraphEl}
             className={`domain-graph ${dragging ? "dragging" : ""}`}
-            viewBox={`0 0 ${graph.width} ${graph.height}`}
+            viewBox={`0 0 ${graphWidth} ${graphHeight}`}
             role="img"
             aria-label="Domain relationship graph"
             onMouseDown={handleMouseDown}
@@ -624,7 +769,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
             onMouseLeave={handleMouseUp}
           >
             <g
-              transform={`translate(${pan.x} ${pan.y}) translate(${graph.width / 2} ${graph.height / 2}) scale(${zoom}) translate(${-graph.width / 2} ${-graph.height / 2})`}
+              transform={`translate(${pan.x} ${pan.y}) translate(${graphWidth / 2} ${graphHeight / 2}) scale(${zoom}) translate(${-graphWidth / 2} ${-graphHeight / 2})`}
             >
               {renderEdges.map((e) => {
                 const from = displayNodeMap.get(e.fromKey);
@@ -645,7 +790,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
               {visibleNodes.map((node) => (
                 <g
                   key={node.key}
-                  className={`graph-node graph-node-${node.kind}`}
+                  className={`graph-node graph-node-${node.kind} ${node.unreachable || node.isUnreachableBucket ? "graph-node-unreachable" : ""}`.trim()}
                   onMouseEnter={() => setHoveredKey(node.key)}
                   onMouseLeave={() => setHoveredKey(null)}
                   onClick={(e) => {
@@ -708,6 +853,14 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                 Unpin
               </button>
             ) : null}
+            <label className="graph-toggle muted">
+              <input
+                type="checkbox"
+                checked={hideUnreachable}
+                onChange={(e) => setHideUnreachable(e.target.checked)}
+              />
+              Hide unreachable
+            </label>
           </div>
           <h3>{hoveredNode?.domain || "Details"}</h3>
           {selectedNode ? <div className="muted">Pinned selection</div> : null}
@@ -947,6 +1100,14 @@ export default function App() {
     () => scans.some((s) => s.status === "running"),
     [scans]
   );
+  const runningScan = useMemo(
+    () => scans.find((s) => s.status === "running") || null,
+    [scans]
+  );
+  const scanProgress = useMemo(
+    () => parseScanProgress(runningScan || activeScan),
+    [runningScan, activeScan]
+  );
   const scanBlocked = scanInFlight || hasRunningScan;
 
   async function loadCompanies() {
@@ -1042,6 +1203,38 @@ export default function App() {
     runWithStatus(() => loadCompany(selectedCustomer));
   }, [selectedCustomer]);
 
+  useEffect(() => {
+    const slug = activeCompany?.slug;
+    if (!slug || !hasRunningScan) {
+      return undefined;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const nextScans = await api.listScans(slug);
+        if (cancelled) return;
+        setScans(nextScans);
+        if (selectedScanId) {
+          const selected = nextScans.find((s) => s.id === selectedScanId);
+          if (selected && (selected.status === "running" || selected.status === "success")) {
+            const nextArtifacts = await api.getArtifacts(slug, selectedScanId);
+            if (!cancelled) {
+              setArtifacts(nextArtifacts);
+            }
+          }
+        }
+      } catch (_err) {
+        // Keep polling silent; transient failures should not spam UI toasts.
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeCompany?.slug, hasRunningScan, selectedScanId]);
+
   return (
     <div className={`app theme-${theme}`}>
       <header className="topbar">
@@ -1051,55 +1244,25 @@ export default function App() {
             Passive attack surface inventory and scan history
           </div>
         </div>
-        <div className="status">
-          <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
-            ⚙
-          </button>
-          <span
-            className={`dot ${loading ? "pulse" : ""} ${hasRunningScan ? "scan-running" : ""}`.trim()}
-          />
-          {loading ? "Syncing" : "Idle"}
-        </div>
-      </header>
-
-      <div className="layout">
-        <aside className="sidebar">
-          <div className="panel-header">
-            <h2>Customers</h2>
-            <button
-              className="ghost"
-              onClick={() => runWithStatus(loadCompanies)}
+        <div className="header-controls">
+          <label className="header-label">
+            Customer
+            <select
+              value={selectedCustomer}
+              onChange={(e) => handleSelectCustomer(e.target.value)}
             >
-              Refresh
-            </button>
-          </div>
-
-          <div className="form">
-            <label>
-              Customer
-              <select
-                value={selectedCustomer}
-                onChange={(e) => handleSelectCustomer(e.target.value)}
-              >
-                <option value={ADD_CUSTOMER_OPTION}>Add Customer</option>
-                {companies.map((c) => (
-                  <option key={c.slug} value={c.slug}>
-                    {c.name} ({c.slug})
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="divider" />
-
+              <option value={ADD_CUSTOMER_OPTION}>Add Customer</option>
+              {companies.map((c) => (
+                <option key={c.slug} value={c.slug}>
+                  {c.name} ({c.slug})
+                </option>
+              ))}
+            </select>
+          </label>
           {selectedCustomer === ADD_CUSTOMER_OPTION ? (
-            <div className="form">
-              <div className="panel-header">
-                <h2>Add customer</h2>
-              </div>
+            <div className="header-create">
               <label>
-                Customer name
+                Name
                 <input
                   value={newCustomerName}
                   onChange={(e) => setNewCustomerName(e.target.value)}
@@ -1141,67 +1304,33 @@ export default function App() {
                   })
                 }
               >
-                Create customer
+                Create
               </button>
             </div>
-          ) : (
-            <div className="form">
-              <div className="panel-header">
-                <h2>Domains</h2>
-              </div>
-              <div className="domain-list">
-                {activeCompany?.domains?.length ? (
-                  activeCompany.domains.map((domain) => (
-                    <div key={domain} className="domain-item domain-row">
-                      <span>{domain}</span>
-                      <button
-                        className="danger ghost domain-delete"
-                        onClick={() =>
-                          runWithStatus(async () => {
-                            await removeDomainFromCompany(domain);
-                          })
-                        }
-                        title={`Delete ${domain}`}
-                        aria-label={`Delete ${domain}`}
-                      >
-                        🗑
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div className="empty">No domains configured</div>
-                )}
-              </div>
-              <label>
-                Add domain
-                <input
-                  value={addDomainInput}
-                  onChange={(e) => setAddDomainInput(e.target.value)}
-                  placeholder="new.example.com"
-                />
-              </label>
-              <button
-                onClick={() =>
-                  runWithStatus(async () => {
-                    if (!activeCompany) return;
-                    const nextDomain = normalizeDomain(addDomainInput);
-                    if (!nextDomain) throw new Error("Domain is required");
-                    const domains = Array.from(
-                      new Set([...activeCompany.domains, nextDomain])
-                    );
-                    await api.replaceDomains(activeCompany.slug, domains);
-                    await loadCompany(activeCompany.slug);
-                  })
-                }
-              >
-                Add domain
-              </button>
-            </div>
-          )}
-        </aside>
+          ) : null}
+          <button className="ghost" onClick={() => runWithStatus(loadCompanies)}>
+            Refresh
+          </button>
+        </div>
+        <div className="status">
+          <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+            ⚙
+          </button>
+          <span
+            className={`dot ${loading ? "pulse" : ""} ${hasRunningScan ? "scan-running" : ""}`.trim()}
+          />
+          {loading ? "Syncing" : "Idle"}
+        </div>
+      </header>
 
+      <div className="layout">
         <main className="content">
-          {!activeCompany ? (
+          {selectedCustomer === ADD_CUSTOMER_OPTION ? (
+            <div className="empty-state">
+              <h2>Create a customer in the header</h2>
+              <p>Use the header form to add a name and initial domain.</p>
+            </div>
+          ) : !activeCompany ? (
             <div className="empty-state">
               <h2>Add or select a customer</h2>
               <p>
@@ -1259,7 +1388,22 @@ export default function App() {
                   <div className="scan-progress">
                     <div className="scan-progress-title">Scan in progress</div>
                     <div className="scan-progress-bar">
-                      <span className="scan-progress-fill" />
+                      <span
+                        className={`scan-progress-fill ${
+                          scanProgress?.indeterminate ? "indeterminate" : "determinate"
+                        }`}
+                        style={
+                          scanProgress?.indeterminate
+                            ? undefined
+                            : { width: `${scanProgress?.percent ?? 0}%` }
+                        }
+                      />
+                    </div>
+                    <div className="scan-progress-message muted">
+                      {scanProgress?.message || "Running scan..."}
+                      {scanProgress?.indeterminate
+                        ? ""
+                        : ` (${scanProgress?.percent ?? 0}%)`}
                     </div>
                     <div className="muted">
                       Starting a new scan is disabled until completion.
@@ -1267,9 +1411,9 @@ export default function App() {
                   </div>
                 ) : null}
 
-                <div className="grid">
-                  <div className="panel">
-                    <h3>Rename customer</h3>
+                <div className="manage-panels">
+                  <details className="panel mini">
+                    <summary>Rename customer</summary>
                     <div className="row">
                       <input
                         value={renameInput}
@@ -1288,10 +1432,10 @@ export default function App() {
                         Save
                       </button>
                     </div>
-                  </div>
+                  </details>
 
-                  <div className="panel">
-                    <h3>Domains</h3>
+                  <details className="panel mini">
+                    <summary>Domains ({activeCompany.domains.length})</summary>
                     <div className="domain-list">
                       {activeCompany.domains.map((domain) => (
                         <div key={domain} className="domain-item domain-row">
@@ -1311,7 +1455,31 @@ export default function App() {
                         </div>
                       ))}
                     </div>
-                  </div>
+                    <label>
+                      Add domain
+                      <input
+                        value={addDomainInput}
+                        onChange={(e) => setAddDomainInput(e.target.value)}
+                        placeholder="new.example.com"
+                      />
+                    </label>
+                    <button
+                      onClick={() =>
+                        runWithStatus(async () => {
+                          if (!activeCompany) return;
+                          const nextDomain = normalizeDomain(addDomainInput);
+                          if (!nextDomain) throw new Error("Domain is required");
+                          const domains = Array.from(
+                            new Set([...activeCompany.domains, nextDomain])
+                          );
+                          await api.replaceDomains(activeCompany.slug, domains);
+                          await loadCompany(activeCompany.slug);
+                        })
+                      }
+                    >
+                      Add domain
+                    </button>
+                  </details>
                 </div>
               </section>
 
@@ -1349,100 +1517,110 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="scan-list">
-                  {scans.length === 0 ? (
-                    <div className="empty empty-with-action">
-                      <span>No scans yet</span>
-                      <button
-                        disabled={scanBlocked}
-                        onClick={() =>
-                          runWithStatus(async () => {
-                            await startScan(activeCompany.slug);
-                          })
-                        }
-                      >
-                        Start first scan
-                      </button>
-                    </div>
-                  ) : (
-                    scans.map((scan) => (
-                      <div
-                        key={scan.id}
-                        className={
-                          scan.id === selectedScanId ? "scan active" : "scan"
-                        }
-                      >
-                        <div className="scan-main">
-                          <div className="scan-title">
-                            #{scan.company_scan_number}
-                          </div>
-                          <div className="scan-meta">
-                            {scan.status} · started {formatDate(scan.started_at)}
-                          </div>
-                        </div>
-                        <div className="scan-actions">
-                          <button
-                            className="ghost"
-                            onClick={() =>
-                              runWithStatus(async () => {
-                                setSelectedScanId(scan.id);
-                                await loadArtifacts(activeCompany.slug, scan.id);
-                              })
-                            }
-                          >
-                            View
-                          </button>
-                          <button
-                            className="danger ghost"
-                            onClick={() =>
-                              runWithStatus(async () => {
-                                if (
-                                  !confirm(
-                                    `Delete scan id ${scan.id} for ${activeCompany.slug}?`
-                                  )
-                                ) {
-                                  return;
-                                }
-                                await api.deleteScan(activeCompany.slug, scan.id);
-                                setSelectedScanId(null);
-                                setArtifacts(null);
-                                await loadCompany(activeCompany.slug);
-                              })
-                            }
-                          >
-                            Delete
-                          </button>
-                        </div>
+                <div className="scan-stack">
+                  <div className={`scan-list ${artifacts ? "blurred" : ""}`}>
+                    {scans.length === 0 ? (
+                      <div className="empty empty-with-action">
+                        <span>No scans yet</span>
+                        <button
+                          disabled={scanBlocked}
+                          onClick={() =>
+                            runWithStatus(async () => {
+                              await startScan(activeCompany.slug);
+                            })
+                          }
+                        >
+                          Start first scan
+                        </button>
                       </div>
-                    ))
-                  )}
-                </div>
-              </section>
-
-              <section className="card">
-                <div className="card-header">
-                  <div>
-                    <h2>Artifacts</h2>
-                    <div className="muted">
-                      {activeScan
-                        ? `Scan #${activeScan.company_scan_number}`
-                        : "Select a scan to view artifacts"}
-                    </div>
+                    ) : (
+                      scans.map((scan) => (
+                        <div
+                          key={scan.id}
+                          className={
+                            scan.id === selectedScanId ? "scan active" : "scan"
+                          }
+                        >
+                          <div className="scan-main">
+                            <div className="scan-title">
+                              #{scan.company_scan_number}
+                            </div>
+                            <div className="scan-meta">
+                              {scan.status} · completed {formatDate(scan.completed_at)}
+                              {scan.notes ? ` · ${scan.notes}` : ""}
+                            </div>
+                          </div>
+                          <div className="scan-actions">
+                            <button
+                              className="ghost"
+                              onClick={() =>
+                                runWithStatus(async () => {
+                                  setSelectedScanId(scan.id);
+                                  await loadArtifacts(activeCompany.slug, scan.id);
+                                })
+                              }
+                            >
+                              View
+                            </button>
+                            <button
+                              className="danger ghost"
+                              onClick={() =>
+                                runWithStatus(async () => {
+                                  if (
+                                    !confirm(
+                                      `Delete scan id ${scan.id} for ${activeCompany.slug}?`
+                                    )
+                                  ) {
+                                    return;
+                                  }
+                                  await api.deleteScan(activeCompany.slug, scan.id);
+                                  setSelectedScanId(null);
+                                  setArtifacts(null);
+                                  await loadCompany(activeCompany.slug);
+                                })
+                              }
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
+                  {artifacts ? (
+                    <div className="artifact-overlay">
+                      <div className="artifact-header">
+                        <div>
+                          <h3>Artifacts</h3>
+                          <div className="muted">
+                            {activeScan
+                              ? `Scan #${activeScan.company_scan_number}`
+                              : "Selected scan"}
+                          </div>
+                        </div>
+                        <button
+                          className="ghost"
+                          onClick={() => {
+                            setSelectedScanId(null);
+                            setArtifacts(null);
+                          }}
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <DomainRelationshipGraph
+                        artifacts={artifacts}
+                        maxLabelCap={maxLabelCap}
+                      />
+                      <details>
+                        <summary className="muted">Raw JSON artifacts</summary>
+                        <pre className="code">
+                          {JSON.stringify(artifacts, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  ) : null}
                 </div>
-                {!artifacts ? (
-                  <div className="empty">No artifacts loaded</div>
-                ) : (
-                  <>
-                    <DomainRelationshipGraph artifacts={artifacts} maxLabelCap={maxLabelCap} />
-                    <details>
-                      <summary className="muted">Raw JSON artifacts</summary>
-                      <pre className="code">
-                        {JSON.stringify(artifacts, null, 2)}
-                      </pre>
-                    </details>
-                  </>
-                )}
               </section>
             </>
           )}

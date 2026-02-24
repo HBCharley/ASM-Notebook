@@ -8,3 +8,4 @@ rich
 uvicorn
 psycopg[binary]
 alembic
+ipwhois

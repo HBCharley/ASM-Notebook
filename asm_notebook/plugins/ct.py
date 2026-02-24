@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import httpx
 
@@ -17,8 +18,10 @@ async def ct_subdomains(root_domain: str) -> set[str]:
     # Polite jitter to reduce burst/rate-limit issues
     await asyncio.sleep(0.2 + random.random() * 0.5)
 
-    # Exponential backoff retries
-    delays = [1, 2, 4, 8]
+    # Exponential backoff retries (tunable for local dev responsiveness)
+    timeout_seconds = float(os.getenv("ASM_CT_TIMEOUT_SECONDS", "12"))
+    retry_count = max(0, int(os.getenv("ASM_CT_RETRY_COUNT", "2")))
+    delays = [1, 2, 4, 8][:retry_count]
     last_err: Exception | None = None
 
     for i, delay in enumerate([0] + delays):
@@ -27,7 +30,7 @@ async def ct_subdomains(root_domain: str) -> set[str]:
 
         try:
             async with httpx.AsyncClient(
-                timeout=30,
+                timeout=timeout_seconds,
                 headers={"User-Agent": "asm-notebook/0.1"},
                 follow_redirects=True,
             ) as client:
