@@ -260,6 +260,11 @@ Startup includes an automatic SQLite compatibility migration for older DB files:
 
 No manual migration step is required for this change.
 
+## POC Closeout and Cloud Migration
+
+- POC closeout checklist: `docs/POC_CLOSEOUT_CHECKLIST.md`
+- GCP migration plan: `docs/GCP_MIGRATION_PLAN.md`
+
 ## Testing
 
 Use deterministic test mode to bypass external CT/DNS/HTTP calls:
