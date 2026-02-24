@@ -275,22 +275,22 @@ Container assets included:
 - Backend image: `Dockerfile`
 - Frontend image: `frontend/Dockerfile` (+ SPA nginx config in `frontend/nginx.conf`)
 - Cloud Build pipelines:
-  - `cloudbuild.api.yaml`
-  - `cloudbuild.frontend.yaml`
+  - `cloudbuild.dev.api.yaml`
+  - `cloudbuild.dev.frontend.yaml`
 
 Backend deploy via Cloud Build:
 
 ```powershell
-gcloud builds submit --config cloudbuild.api.yaml
+gcloud builds submit --config cloudbuild.dev.api.yaml
 ```
 
 Frontend deploy via Cloud Build:
 
 ```powershell
-gcloud builds submit --config cloudbuild.frontend.yaml
+gcloud builds submit --config cloudbuild.dev.frontend.yaml
 ```
 
-For frontend-to-API routing in cloud, set `_VITE_API_BASE` substitution in `cloudbuild.frontend.yaml`
+For frontend-to-API routing in cloud, set `_VITE_API_BASE` substitution in `cloudbuild.dev.frontend.yaml`
 to your backend URL (for example: `https://asm-api-xxxxx-uc.a.run.app`).
 
 ## Testing
