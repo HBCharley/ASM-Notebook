@@ -59,6 +59,12 @@ There is a unique constraint on `(company_id, company_scan_number)` for stable p
 poetry install
 ```
 
+Run DB migrations:
+
+```powershell
+poetry run alembic upgrade head
+```
+
 ## Install (pip + venv)
 
 ```powershell
@@ -66,6 +72,13 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 python -m pip install "uvicorn[standard]"
+```
+
+Run DB migrations:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+alembic upgrade head
 ```
 
 ## Run the API (Poetry)
@@ -289,6 +302,7 @@ No manual migration step is required for this change.
 ## POC Closeout and Cloud Migration
 
 - POC closeout checklist: `docs/POC_CLOSEOUT_CHECKLIST.md`
+- Operational handoff notes: `docs/OPERATIONAL_HANDOFF_NOTES.md`
 - GCP migration plan: `docs/GCP_MIGRATION_PLAN.md`
 
 ## GCP Deployment Baseline
@@ -328,7 +342,6 @@ poetry run python -m pytest -q
 ## Known Gaps
 
 - No service layer yet (scan logic is in the API/CLI).
-- No Alembic migrations.
 - No external job queue yet (uses FastAPI background tasks; RQ/Celery would be better for concurrency/retries).
 
 ## Safety / Scope

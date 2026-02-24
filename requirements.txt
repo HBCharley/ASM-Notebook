@@ -7,3 +7,4 @@ dnspython
 rich
 uvicorn
 psycopg[binary]
+alembic

@@ -4,21 +4,21 @@ Use this checklist to formally close the local/POC phase before GCP migration.
 
 ## 1) Freeze Local Baseline
 
-- [ ] Create a final local release tag (example: `v0.1.0-local-final`).
-- [ ] Export sample scan artifacts for reference (`scan export` outputs).
-- [ ] Capture DB snapshot (`asm_notebook.sqlite3`) and store in secure backup.
-- [ ] Confirm working tree is clean and tests pass (`poetry run python -m pytest -q`).
+- [x] Create a final local release tag (example: `v0.1.0-local-final`).
+- [x] Export sample scan artifacts for reference (`scan export` outputs).
+- [x] Capture DB snapshot (`asm_notebook.sqlite3`) and store in secure backup.
+- [x] Confirm working tree is clean and tests pass (`poetry run python -m pytest -q`).
 
 ## 2) Operational Handoff Notes
 
-- [ ] Record current env vars in use (`ASM_DB_PATH`, `ASM_TEST_MODE`, frontend `VITE_*`).
-- [ ] Confirm known gaps accepted from POC phase (no job queue, SQLite local-first).
-- [ ] Lock dependency set (`poetry.lock` committed, Node lockfile committed if used).
+- [x] Record current env vars in use (`ASM_DB_PATH`, `ASM_TEST_MODE`, frontend `VITE_*`).
+- [x] Confirm known gaps accepted from POC phase (no job queue, SQLite local-first).
+- [x] Lock dependency set (`poetry.lock` committed, Node lockfile committed if used).
 
 ## 3) Security and Data Hygiene
 
 - [ ] Remove any hardcoded/demo credentials from local shells/scripts.
-- [ ] Verify `.gitignore` excludes DB files and local secrets.
+- [x] Verify `.gitignore` excludes DB files and local secrets.
 - [ ] Classify current stored scan data (internal/test/public) and retention expectations.
 
 ## 4) Migration Readiness Gate

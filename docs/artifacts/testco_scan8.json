@@ -1,0 +1,180 @@
+{
+  "company": {
+    "slug": "testco",
+    "name": "Test Co"
+  },
+  "scan": {
+    "id": 8,
+    "company_scan_number": 1,
+    "status": "success",
+    "started_at": "2026-02-23 07:33:30.628632",
+    "completed_at": "2026-02-23 07:34:14.357903",
+    "notes": null
+  },
+  "artifacts": {
+    "domains": {
+      "roots": [
+        "example.com"
+      ],
+      "domains": [
+        "*.example.com",
+        "dev.example.com",
+        "example.com",
+        "m.example.com",
+        "products.example.com",
+        "support.example.com",
+        "www.example.com"
+      ],
+      "resolvable_domains": [
+        "dev.example.com",
+        "example.com",
+        "m.example.com",
+        "products.example.com",
+        "support.example.com",
+        "www.example.com"
+      ]
+    },
+    "dns": {
+      "records": [
+        {
+          "domain": "dev.example.com",
+          "resolved_at": "2026-02-23T07:34:13.722534+00:00",
+          "A": [],
+          "AAAA": [],
+          "CNAME": [],
+          "MX": [],
+          "NS": [],
+          "TXT": [],
+          "SOA": [],
+          "CAA": [],
+          "ips": [],
+          "PTR": {}
+        },
+        {
+          "domain": "example.com",
+          "resolved_at": "2026-02-23T07:34:13.846737+00:00",
+          "A": [
+            "104.18.26.120",
+            "104.18.27.120"
+          ],
+          "AAAA": [
+            "2606:4700::6812:1b78",
+            "2606:4700::6812:1a78"
+          ],
+          "CNAME": [],
+          "MX": [
+            "0 "
+          ],
+          "NS": [
+            "elliott.ns.cloudflare.com",
+            "hera.ns.cloudflare.com"
+          ],
+          "TXT": [
+            "\"v=spf1 -all\"",
+            "\"_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9\""
+          ],
+          "SOA": [
+            "elliott.ns.cloudflare.com. dns.cloudflare.com. 2397268091 10000 2400 604800 1800"
+          ],
+          "CAA": [],
+          "ips": [
+            "104.18.26.120",
+            "104.18.27.120",
+            "2606:4700::6812:1a78",
+            "2606:4700::6812:1b78"
+          ],
+          "PTR": {
+            "104.18.26.120": [],
+            "104.18.27.120": [],
+            "2606:4700::6812:1a78": [],
+            "2606:4700::6812:1b78": []
+          }
+        },
+        {
+          "domain": "m.example.com",
+          "resolved_at": "2026-02-23T07:34:13.961319+00:00",
+          "A": [],
+          "AAAA": [],
+          "CNAME": [],
+          "MX": [],
+          "NS": [],
+          "TXT": [],
+          "SOA": [],
+          "CAA": [],
+          "ips": [],
+          "PTR": {}
+        },
+        {
+          "domain": "products.example.com",
+          "resolved_at": "2026-02-23T07:34:14.095360+00:00",
+          "A": [],
+          "AAAA": [],
+          "CNAME": [],
+          "MX": [],
+          "NS": [],
+          "TXT": [],
+          "SOA": [],
+          "CAA": [],
+          "ips": [],
+          "PTR": {}
+        },
+        {
+          "domain": "support.example.com",
+          "resolved_at": "2026-02-23T07:34:14.206062+00:00",
+          "A": [],
+          "AAAA": [],
+          "CNAME": [],
+          "MX": [],
+          "NS": [],
+          "TXT": [],
+          "SOA": [],
+          "CAA": [],
+          "ips": [],
+          "PTR": {}
+        },
+        {
+          "domain": "www.example.com",
+          "resolved_at": "2026-02-23T07:34:14.355395+00:00",
+          "A": [
+            "104.18.27.120",
+            "104.18.26.120"
+          ],
+          "AAAA": [
+            "2606:4700::6812:1a78",
+            "2606:4700::6812:1b78"
+          ],
+          "CNAME": [],
+          "MX": [],
+          "NS": [],
+          "TXT": [],
+          "SOA": [],
+          "CAA": [],
+          "ips": [
+            "104.18.26.120",
+            "104.18.27.120",
+            "2606:4700::6812:1a78",
+            "2606:4700::6812:1b78"
+          ],
+          "PTR": {
+            "104.18.26.120": [],
+            "104.18.27.120": [],
+            "2606:4700::6812:1a78": [],
+            "2606:4700::6812:1b78": []
+          }
+        }
+      ],
+      "summary": {
+        "scanned_domains": 6,
+        "resolved_domains": 2,
+        "unresolved_domains": 4,
+        "unique_ip_count": 4,
+        "unique_ips": [
+          "104.18.26.120",
+          "104.18.27.120",
+          "2606:4700::6812:1a78",
+          "2606:4700::6812:1b78"
+        ]
+      }
+    }
+  }
+}
