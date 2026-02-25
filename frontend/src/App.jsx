@@ -134,11 +134,65 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const [treeOpen, setTreeOpen] = useState(false);
   const [hideUnreachable, setHideUnreachable] = useState(false);
   const [expandedRoots, setExpandedRoots] = useState({});
+  const [domainFilter, setDomainFilter] = useState("");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panTargetRef = useRef({ x: 0, y: 0 });
+  const zoomTargetRef = useRef(1);
+  const animatingRef = useRef(false);
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const [dragStart, setDragStart] = useState(null);
   const [graphEl, setGraphEl] = useState(null);
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+
+  function startAnimation() {
+    if (animatingRef.current) return;
+    animatingRef.current = true;
+    const step = () => {
+      const targetZoom = zoomTargetRef.current;
+      const targetPan = panTargetRef.current;
+      setZoom((z) => {
+        const next = z + (targetZoom - z) * 0.18;
+        return Math.abs(targetZoom - next) < 0.01 ? targetZoom : next;
+      });
+      setPan((p) => {
+        const nx = p.x + (targetPan.x - p.x) * 0.2;
+        const ny = p.y + (targetPan.y - p.y) * 0.2;
+        const done =
+          Math.abs(targetPan.x - nx) < 0.5 && Math.abs(targetPan.y - ny) < 0.5;
+        return done ? targetPan : { x: nx, y: ny };
+      });
+
+      const zoomDone = Math.abs(zoomTargetRef.current - zoomRef.current) < 0.01;
+      const panDone =
+        Math.abs(panTargetRef.current.x - panRef.current.x) < 0.5 &&
+        Math.abs(panTargetRef.current.y - panRef.current.y) < 0.5;
+      if (zoomDone && panDone) {
+        animatingRef.current = false;
+        return;
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
+  function setZoomTarget(value) {
+    zoomTargetRef.current = clampZoom(value);
+    startAnimation();
+  }
+
+  function setPanTarget(next) {
+    panTargetRef.current = next;
+    startAnimation();
+  }
   const intelByDomain = useMemo(
     () =>
       new Map(
@@ -227,13 +281,13 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
         if (useFull360) {
           const golden = 2.399963229728653;
           angle = idx * golden;
-          radius = 44 + 9 * Math.sqrt(idx + 1);
+          radius = 70 + 16 * Math.sqrt(idx + 1);
         } else {
           // Lower-density hubs use a constrained arc to keep local structure readable.
           const spread = Math.min(Math.PI * 1.25, Math.max(0.7, domains.length * 0.19));
           const t = domains.length <= 1 ? 0 : idx / (domains.length - 1) - 0.5;
           angle = rootBase + t * spread;
-          radius = 52 + (idx % 4) * 14 + Math.floor(idx / 4) * 4;
+          radius = 64 + (idx % 5) * 18 + Math.floor(idx / 5) * 6;
         }
         const node = {
           key: `domain:${domain}`,
@@ -354,7 +408,14 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const hubNode = graph ? graphNodes.find((n) => n.kind === "hub") : null;
   const rootNodes = graph ? graphNodes.filter((n) => n.kind === "root") : [];
   const domainNodes = graph ? graphNodes.filter((n) => n.kind === "domain") : [];
-  const detailMode = zoom < 1.1 ? "overview" : zoom < 1.55 ? "focused" : "full";
+  const detailMode =
+    graphCounts.domains <= maxLabelCap
+      ? "full"
+      : zoom < 1.1
+        ? "overview"
+        : zoom < 1.55
+          ? "focused"
+          : "full";
 
   useEffect(() => {
     if (!graphEl) return;
@@ -363,7 +424,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       e.preventDefault();
       e.stopPropagation();
       const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      setZoom((z) => clampZoom(z + delta));
+      setZoomTarget(zoomTargetRef.current + delta);
     };
     graphEl.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -381,7 +442,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
 
   function handleMouseMove(e) {
     if (!dragging || !dragStart) return;
-    setPan({
+    setPanTarget({
       x: e.clientX - dragStart.x,
       y: e.clientY - dragStart.y,
     });
@@ -399,6 +460,8 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       graphCounts.roots,
       maxLabelCap
     );
+    zoomTargetRef.current = suggested;
+    panTargetRef.current = { x: 0, y: 0 };
     setZoom(suggested);
     setPan({ x: 0, y: 0 });
   }, [artifacts, maxLabelCap]);
@@ -563,7 +626,72 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     };
   });
 
-  const visibleNodes = displayNodes.filter((n) => !n.hidden);
+  function applyForceLayout(nodes) {
+    if (detailMode === "overview") return nodes;
+    const result = nodes.map((n) => ({ ...n }));
+    const indexByKey = new Map(result.map((n, i) => [n.key, i]));
+    const rootPositions = new Map(
+      result
+        .filter((n) => n.kind === "root")
+        .map((n) => [n.domain, { x: n.x, y: n.y }])
+    );
+    const domainsByRoot = new Map();
+    for (const node of result) {
+      if (node.kind !== "domain" || node.hidden || !node.root) continue;
+      if (!domainsByRoot.has(node.root)) domainsByRoot.set(node.root, []);
+      domainsByRoot.get(node.root).push(node.key);
+    }
+    const repelRadius = 26 + zoom * 5;
+    const repelRadiusSq = repelRadius * repelRadius;
+    const spring = 0.004;
+    const damp = 0.92;
+    const step = 0.12;
+    const iterations = 28;
+    for (const [root, keys] of domainsByRoot) {
+      const rootPos = rootPositions.get(root);
+      if (!rootPos || keys.length < 2) continue;
+      const velocities = new Map(keys.map((k) => [k, { x: 0, y: 0 }]));
+      for (let iter = 0; iter < iterations; iter += 1) {
+        for (let i = 0; i < keys.length; i += 1) {
+          const ki = keys[i];
+          const ni = result[indexByKey.get(ki)];
+          let fx = 0;
+          let fy = 0;
+          for (let j = 0; j < keys.length; j += 1) {
+            if (i === j) continue;
+            const kj = keys[j];
+            const nj = result[indexByKey.get(kj)];
+            const dx = ni.x - nj.x;
+            const dy = ni.y - nj.y;
+            const distSq = dx * dx + dy * dy;
+            if (distSq > 0 && distSq < repelRadiusSq) {
+              const dist = Math.sqrt(distSq);
+              const force = (repelRadius - dist) / repelRadius;
+              fx += (dx / dist) * force * 1.6;
+              fy += (dy / dist) * force * 1.6;
+            }
+          }
+          const dxr = rootPos.x - ni.x;
+          const dyr = rootPos.y - ni.y;
+          fx += dxr * spring;
+          fy += dyr * spring;
+          const v = velocities.get(ki);
+          v.x = (v.x + fx * step) * damp;
+          v.y = (v.y + fy * step) * damp;
+        }
+        for (const key of keys) {
+          const n = result[indexByKey.get(key)];
+          const v = velocities.get(key);
+          n.x += v.x;
+          n.y += v.y;
+        }
+      }
+    }
+    return result;
+  }
+
+  const forceNodes = applyForceLayout(displayNodes);
+  const visibleNodes = forceNodes.filter((n) => !n.hidden);
   const displayNodeMap = new Map(visibleNodes.map((n) => [n.key, n]));
 
   const outgoing = new Map();
@@ -585,6 +713,61 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       .slice(0, labelBudget)
       .map((n) => n.key)
   );
+  const labelFontSize = Math.max(4.2, 10 / Math.pow(Math.max(1, zoom), 1.9));
+  const shouldShowLabel = (node) =>
+    node.kind !== "domain" ||
+    budgetedDomainLabels.has(node.key);
+  const labelPositions = (() => {
+    const placed = [];
+    const map = new Map();
+    const options = [
+      [8, 1],
+      [14, 8],
+      [14, -8],
+      [20, 12],
+      [20, -12],
+      [0, 16],
+      [0, -16],
+      [28, 0],
+      [-12, 0],
+    ];
+    const candidates = [
+      ...visibleNodes.filter((n) => n.kind !== "domain"),
+      ...visibleNodes
+        .filter((n) => n.kind === "domain" && budgetedDomainLabels.has(n.key))
+        .sort(
+          (a, b) =>
+            (b.totalRecords || 0) - (a.totalRecords || 0) ||
+            a.domain.localeCompare(b.domain)
+        ),
+    ];
+    for (const node of candidates) {
+      if (!shouldShowLabel(node)) continue;
+      const label = node.domain || "";
+      const width = Math.max(10, label.length * labelFontSize * 0.58);
+      const height = labelFontSize + 3;
+      let placedBox = null;
+      for (const [ox, oy] of options) {
+        const x = node.x + ox;
+        const y = node.y + oy;
+        const box = { x, y: y - height / 2, w: width, h: height };
+        const collides = placed.some(
+          (p) =>
+            box.x < p.x + p.w &&
+            box.x + box.w > p.x &&
+            box.y < p.y + p.h &&
+            box.y + box.h > p.y
+        );
+        if (!collides) {
+          placedBox = box;
+          map.set(node.key, { x, y, hidden: false });
+          placed.push(box);
+          break;
+        }
+      }
+    }
+    return map;
+  })();
   const selectedNode =
     (selectedKey && displayNodeMap.get(selectedKey)) ||
     graphNodes.find((n) => n.key === selectedKey) ||
@@ -593,6 +776,15 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     selectedNode || displayNodeMap.get(hoveredKey) || hubNode;
   const dnsSummary = artifacts?.dns?.summary || null;
   const intelSummary = artifacts?.dns_intel?.summary || null;
+  const allDomains = artifacts?.domains?.domains || [];
+  const domainList = useMemo(() => {
+    const list = allDomains.filter((d) => {
+      if (focusedRoot && !isInRootScope(d, focusedRoot)) return false;
+      if (!domainFilter) return true;
+      return d.includes(domainFilter.trim().toLowerCase());
+    });
+    return list.sort((a, b) => a.localeCompare(b));
+  }, [allDomains, focusedRoot, domainFilter]);
   const nodeIntel = hoveredNode?.domain ? intelByDomain.get(hoveredNode.domain) : null;
   const ptrValues = hoveredNode?.dns?.PTR
     ? Object.values(hoveredNode.dns.PTR).flat().filter(Boolean)
@@ -616,8 +808,8 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
 
   function focusNode(node, targetZoom = Math.max(zoom, 2.1)) {
     const z = clampZoom(Math.max(targetZoom, 2.5));
-    setZoom(z);
-    setPan({
+    setZoomTarget(z);
+    setPanTarget({
       x: -z * (node.x - graphWidth / 2),
       y: -z * (node.y - graphHeight / 2),
     });
@@ -638,8 +830,8 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
       return;
     }
     setSelectedKey(node.key);
-    setPan({ x: 0, y: 0 });
-    setZoom(clampZoom(1.3));
+    setPanTarget({ x: 0, y: 0 });
+    setZoomTarget(1.3);
   }
 
   useEffect(() => {
@@ -848,14 +1040,14 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                             : 3.4375
                     }
                   />
-                  {node.kind !== "domain" ||
-                  budgetedDomainLabels.has(node.key) ||
+                  {labelPositions.has(node.key) ||
                   node.key === hoveredKey ||
                   node.key === selectedKey ? (
                     <text
-                      x={node.x + 8}
-                      y={node.y + 1}
-                      fontSize={Math.max(4.5, 10 / Math.pow(Math.max(1, zoom), 1.8))}
+                      className="graph-label"
+                      x={(labelPositions.get(node.key)?.x ?? node.x + 8)}
+                      y={(labelPositions.get(node.key)?.y ?? node.y + 1)}
+                      fontSize={labelFontSize}
                     >
                       {node.domain}
                     </text>
@@ -973,6 +1165,30 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                 <span>{intelSummary.ipv6_domains ?? 0}</span>
               </div>
             </div>
+          ) : null}
+          {(hoveredNode?.kind === "hub" || hoveredNode?.kind === "root") && domainList.length ? (
+            <details className="graph-details" open>
+              <summary>
+                Discovered domains ({domainList.length}
+                {focusedRoot ? ` in ${focusedRoot}` : ""})
+              </summary>
+              <input
+                className="domain-filter"
+                placeholder="Filter domains..."
+                value={domainFilter}
+                onChange={(e) => setDomainFilter(e.target.value.toLowerCase())}
+              />
+              <div className="graph-domain-list">
+                {domainList.slice(0, 200).map((d) => (
+                  <div key={`dl-${d}`} className="graph-domain-item">
+                    {d}
+                  </div>
+                ))}
+                {domainList.length > 200 ? (
+                  <div className="muted">+{domainList.length - 200} more</div>
+                ) : null}
+              </div>
+            </details>
           ) : null}
           {hoveredNode?.kind === "aggregate" ? (
             <div className="muted">
@@ -1531,7 +1747,7 @@ export default function App() {
       await loadCompany(slug);
       if (result?.scan_id) {
         setSelectedScanId(result.scan_id);
-        await loadArtifacts(slug, result.scan_id);
+        setArtifacts(null);
       }
     } finally {
       setScanInFlight(false);
@@ -1609,7 +1825,7 @@ export default function App() {
         setScans(nextScans);
         if (selectedScanId) {
           const selected = nextScans.find((s) => s.id === selectedScanId);
-          if (selected && (selected.status === "running" || selected.status === "success")) {
+          if (selected && selected.status === "success") {
             const nextArtifacts = await api.getArtifacts(slug, selectedScanId);
             if (!cancelled) {
               setArtifacts(nextArtifacts);

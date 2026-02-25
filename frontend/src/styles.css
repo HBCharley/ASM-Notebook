@@ -789,7 +789,8 @@ button.danger.ghost {
   text-anchor: start;
   dominant-baseline: middle;
   fill: var(--ink);
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
 }
 
 .graph-node circle {
@@ -938,6 +939,31 @@ button.danger.ghost {
 
 .graph-details summary::-webkit-details-marker {
   display: none;
+}
+
+.domain-filter {
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.graph-domain-list {
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--card) 96%, transparent);
+}
+
+.graph-domain-item {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 2px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+
+.graph-domain-item:last-child {
+  border-bottom: none;
 }
 
 .graph-chip-list {
