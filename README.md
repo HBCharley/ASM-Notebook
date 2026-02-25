@@ -151,16 +151,23 @@ Notes:
 - Scan execution:
   - Starting a scan shows an in-progress visualization
   - New scan starts are blocked while a scan is running
+  - Deep scan toggle (fetches `favicon.ico`, `robots.txt`, `sitemap.xml`)
 - Artifacts visualization:
   - Interactive hub/spoke graph for scope roots and discovered domains
   - Optional `Tree view` (`Scope Browser`) to navigate roots/domains and focus graph nodes
+  - Click domain labels or dots to open details (labels do not jump on hover)
   - Hover or click nodes to inspect DNS summary (`A`, `AAAA`, `CNAME`, `MX`, `NS`)
   - Clicking a node pins details; pinned view overlays the artifact panel for full detail
   - Hovering a hub/root shows a spoke list; clicking a spoke focuses that node
   - `Ctrl + Scroll` zooms graph, drag to pan, `Reset` restores view
-  - Graph supports adaptive detail levels and label caps for crowded scans
-  - Enriched fields shown per domain: SPF/DMARC/MTA-STS/BIMI/DKIM hints, security headers, HSTS status,
-    TLS/cert details, fingerprints, ASN for IPs, and dangling CNAME detection
+  - Graph supports adaptive detail levels, label caps, and force layout for crowded scans
+  - Enriched fields shown per domain:
+    - DNS posture: SPF/DMARC/MTA-STS/BIMI/DKIM/CNAME takeover checks, wildcard detection
+    - Web posture: security headers, HSTS, TLS/cert details, reported server versions
+    - Fingerprints/tech: Wappalyzer-style hints + favicon hashes
+    - Edge/CDN: provider signals + ASN mapping
+    - Exposure scoring and change summary
+    - Deep scan results (favicon/robots/sitemap response metadata)
 - Theme:
   - Global light/dark mode toggle in the top bar
 
@@ -272,13 +279,19 @@ Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/by-number/1"
 1. `POST /companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
 2. Background worker collects subdomains via Certificate Transparency (`crt.sh`).
 3. Scope-filter against root domains.
-4. Perform passive DNS resolution (A/AAAA/CNAME/MX/NS) and HTTP metadata checks.
-5. Persist artifacts:
+4. Perform passive DNS resolution (A/AAAA/CNAME/MX/NS + TXT/CAA/NS/SOA as needed).
+5. Enrich DNS-derived intel (SPF/DMARC/MTA-STS/BIMI/DKIM, ASN lookup, takeover hints, wildcard detection).
+6. Perform HTTP metadata checks (status, headers, TLS, tech fingerprints, reported versions, edge/CDN signals).
+7. Optional deep scan (`favicon.ico`, `robots.txt`, `sitemap.xml`) when enabled.
+8. Persist artifacts:
    - `domains`
    - `dns`
    - `web`
    - `dns_intel`
-6. Update `ScanRun` progress notes during execution (e.g., `3/6 Persisting domains...`) and finalize status/timestamps (`success` or `failed`).
+   - `ct_enrichment`
+   - `wildcard`
+   - `change_summary`
+9. Update `ScanRun` progress notes during execution (e.g., `3/6 Persisting domains...`) and finalize status/timestamps (`success` or `failed`).
 
 ## Data & Storage
 
