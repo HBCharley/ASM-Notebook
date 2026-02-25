@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import logoLight from "./assets/logo-light.png";
 import logoDark from "./assets/logo-dark.png";
@@ -601,9 +601,18 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
     ? Object.keys(nodeIntel.web.security_headers)
     : [];
   const fingerprints = nodeIntel?.web?.fingerprints || [];
+  const reportedVersions = nodeIntel?.web?.reported_versions || [];
+  const technologies = nodeIntel?.web?.technologies || [];
   const hsts = nodeIntel?.web?.hsts || null;
   const tls = nodeIntel?.web?.tls || null;
   const ipAsn = nodeIntel?.ip_asn || [];
+  const edgeProvider = nodeIntel?.web?.edge_provider || null;
+  const cloudStorage = nodeIntel?.web?.cloud_storage || null;
+  const deepScan = nodeIntel?.web?.deep_scan || null;
+  const mailProviders = nodeIntel?.mail_providers || [];
+  const exposureScore = nodeIntel?.exposure_score ?? null;
+  const exposureFactors = nodeIntel?.exposure_factors || [];
+  const cveFindings = nodeIntel?.cve_findings || [];
 
   function focusNode(node, targetZoom = Math.max(zoom, 2.1)) {
     const z = clampZoom(Math.max(targetZoom, 2.5));
@@ -1005,17 +1014,70 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                     <span>{nodeIntel.dmarc_policy || "-"}</span>
                   </div>
                   <div className="graph-record-row">
+                    <span>Email security score</span>
+                    <span>{nodeIntel.email_security_score ?? 0} / 10</span>
+                  </div>
+                  {mailProviders.length ? (
+                    <div className="graph-record-row">
+                      <span>Mail providers</span>
+                      <span>{mailProviders.join(", ")}</span>
+                    </div>
+                  ) : null}
+                  <div className="graph-record-row">
                     <span>Dangling CNAME</span>
                     <span>{nodeIntel.dangling_cname ? "possible" : "no"}</span>
                   </div>
                   <div className="graph-record-row">
+                    <span>Takeover risk</span>
+                    <span>{nodeIntel.takeover_risk ? "possible" : "no"}</span>
+                  </div>
+                  {nodeIntel.takeover_targets?.length ? (
+                    <div className="graph-record-row">
+                      <span>Takeover targets</span>
+                      <span>{nodeIntel.takeover_targets.join(", ")}</span>
+                    </div>
+                  ) : null}
+                  <div className="graph-record-row">
+                    <span>Surface class</span>
+                    <span>{nodeIntel.surface_class || "web"}</span>
+                  </div>
+                  <div className="graph-record-row">
+                    <span>Root wildcard</span>
+                    <span>{nodeIntel.root_wildcard ? "yes" : "no"}</span>
+                  </div>
+                  <div className="graph-record-row">
                     <span>CDN / Proxy</span>
                     <span>
-                      {nodeIntel.web?.is_cdn_or_proxy
-                        ? nodeIntel.web?.cdn_or_proxy_provider || "yes"
-                        : "no"}
+                      {edgeProvider?.provider
+                        ? `${edgeProvider.provider} (${edgeProvider.confidence || "low"})`
+                        : nodeIntel.web?.is_cdn_or_proxy
+                          ? nodeIntel.web?.cdn_or_proxy_provider || "yes"
+                          : "no"}
+                      {edgeProvider?.asn_provider
+                        ? ` · ASN: ${edgeProvider.asn_provider}`
+                        : ""}
                     </span>
                   </div>
+                  {edgeProvider?.signals?.length || edgeProvider?.asn_signals?.length ? (
+                    <details className="graph-details">
+                      <summary>Edge signals</summary>
+                      <div className="graph-chip-list">
+                        {(edgeProvider.signals || []).map((sig) => (
+                          <span key={`edge-sig-${hoveredNode.key}-${sig}`} className="graph-chip">
+                            {sig}
+                          </span>
+                        ))}
+                        {(edgeProvider.asn_signals || []).map((sig) => (
+                          <span
+                            key={`edge-asn-${hoveredNode.key}-${sig}`}
+                            className="graph-chip"
+                          >
+                            {sig}
+                          </span>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
                   <div className="graph-record-row">
                     <span>HTTP</span>
                     <span>
@@ -1037,6 +1099,67 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                       <span>Title</span>
                       <span>{nodeIntel.web.title}</span>
                     </div>
+                  ) : null}
+                  {cloudStorage && cloudStorage.provider ? (
+                    <div className="graph-record-row">
+                      <span>Cloud storage</span>
+                      <span>
+                        {cloudStorage.provider}
+                        {cloudStorage.listing_detected ? " (listing)" : ""}
+                        {cloudStorage.error_hint ? ` (${cloudStorage.error_hint})` : ""}
+                      </span>
+                    </div>
+                  ) : null}
+                  {exposureScore !== null ? (
+                    <div className="graph-record-row">
+                      <span>Exposure score</span>
+                      <span>{exposureScore} / 10</span>
+                    </div>
+                  ) : null}
+                  {deepScan?.enabled ? (
+                    <details className="graph-details">
+                      <summary>Deep scan</summary>
+                      <div className="graph-records">
+                        <div className="graph-record-row">
+                          <span>favicon.ico</span>
+                          <span>
+                            {deepScan.favicon?.status_code ?? "-"}
+                            {deepScan.favicon?.response_ms !== undefined
+                              ? ` · ${deepScan.favicon.response_ms}ms`
+                              : ""}
+                          </span>
+                        </div>
+                        <div className="graph-record-row">
+                          <span>robots.txt</span>
+                          <span>
+                            {deepScan.robots?.status_code ?? "-"}
+                            {deepScan.robots?.response_ms !== undefined
+                              ? ` · ${deepScan.robots.response_ms}ms`
+                              : ""}
+                          </span>
+                        </div>
+                        <div className="graph-record-row">
+                          <span>sitemap.xml</span>
+                          <span>
+                            {deepScan.sitemap?.status_code ?? "-"}
+                            {deepScan.sitemap?.response_ms !== undefined
+                              ? ` · ${deepScan.sitemap.response_ms}ms`
+                              : ""}
+                          </span>
+                        </div>
+                        {deepScan.favicon?.hash_mmh3 ? (
+                          <div className="graph-record-row">
+                            <span>Favicon hash</span>
+                            <span>
+                              {deepScan.favicon.hash_mmh3}
+                              {deepScan.favicon.hash_fingerprint
+                                ? ` · ${deepScan.favicon.hash_fingerprint}`
+                                : ""}
+                            </span>
+                          </div>
+                        ) : null}
+                      </div>
+                    </details>
                   ) : null}
                   {securityHeaderKeys.length ? (
                     <details className="graph-details">
@@ -1115,14 +1238,81 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                       ) : null}
                     </details>
                   ) : null}
-                  {fingerprints.length ? (
+                  {fingerprints.length || reportedVersions.length || technologies.length ? (
                     <details className="graph-details">
                       <summary>Fingerprints</summary>
+                      {fingerprints.length ? (
+                        <div className="graph-chip-list">
+                          {fingerprints.map((fp) => (
+                            <span key={`fp-${hoveredNode.key}-${fp}`} className="graph-chip">
+                              {fp}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {technologies.length ? (
+                        <div className="graph-list-block">
+                          <div className="muted">Technologies</div>
+                          <div className="graph-records">
+                            {technologies.map((entry, idx) => (
+                              <div
+                                key={`tech-${hoveredNode.key}-${idx}-${entry.name}`}
+                                className="graph-record-row"
+                              >
+                                <span>{entry.name}</span>
+                                <span className="muted">{entry.source}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {reportedVersions.length ? (
+                        <div className="graph-list-block">
+                          <div className="muted">Reported versions</div>
+                          <div className="graph-records">
+                            {reportedVersions.map((entry, idx) => (
+                              <div
+                                key={`rv-${hoveredNode.key}-${idx}-${entry.name}-${entry.version}`}
+                                className="graph-record-row"
+                              >
+                                <span>
+                                  {entry.name}
+                                  {entry.version ? ` ${entry.version}` : ""}
+                                </span>
+                                <span className="muted">{entry.source}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </details>
+                  ) : null}
+                  {exposureFactors.length ? (
+                    <details className="graph-details">
+                      <summary>Exposure factors</summary>
                       <div className="graph-chip-list">
-                        {fingerprints.map((fp) => (
-                          <span key={`fp-${hoveredNode.key}-${fp}`} className="graph-chip">
-                            {fp}
+                        {exposureFactors.map((factor) => (
+                          <span key={`exp-${hoveredNode.key}-${factor}`} className="graph-chip">
+                            {factor}
                           </span>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
+                  {cveFindings.length ? (
+                    <details className="graph-details">
+                      <summary>CVE findings</summary>
+                      <div className="graph-records">
+                        {cveFindings.map((row, idx) => (
+                          <div
+                            key={`cve-${hoveredNode.key}-${idx}-${row.cve}`}
+                            className="graph-record-row"
+                          >
+                            <span>
+                              {row.cve} · {row.component} {row.version}
+                            </span>
+                            <span className="muted">{row.severity}</span>
+                          </div>
                         ))}
                       </div>
                     </details>
@@ -1148,6 +1338,18 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                       <div className="graph-chip-list">
                         {nodeIntel.provider_hints.map((p) => (
                           <span key={`hint-${hoveredNode.key}-${p}`} className="graph-chip">
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {nodeIntel.service_hints?.length ? (
+                    <div className="graph-list-block">
+                      <div className="muted">Service hints</div>
+                      <div className="graph-chip-list">
+                        {nodeIntel.service_hints.map((p) => (
+                          <span key={`svc-${hoveredNode.key}-${p}`} className="graph-chip">
                             {p}
                           </span>
                         ))}
@@ -1249,12 +1451,25 @@ export default function App() {
   const [addDomainInput, setAddDomainInput] = useState("");
   const [renameInput, setRenameInput] = useState("");
   const [scanInFlight, setScanInFlight] = useState(false);
+  const [deepScan, setDeepScan] = useState(
+    () => window.localStorage.getItem("asm.scan.deep") === "true"
+  );
   const [customerSectionOpen, setCustomerSectionOpen] = useState(
     () => window.localStorage.getItem("asm.customer.open") !== "false"
   );
   const [scansSectionOpen, setScansSectionOpen] = useState(
     () => window.localStorage.getItem("asm.scans.open") !== "false"
   );
+  const [customerHeight, setCustomerHeight] = useState(() => {
+    const raw = window.localStorage.getItem("asm.customer.height");
+    return raw ? Number(raw) : null;
+  });
+  const [scansHeight, setScansHeight] = useState(() => {
+    const raw = window.localStorage.getItem("asm.scans.height");
+    return raw ? Number(raw) : null;
+  });
+  const customerCardRef = useRef(null);
+  const scansCardRef = useRef(null);
 
   const activeScan = useMemo(
     () => scans.find((s) => s.id === selectedScanId),
@@ -1312,7 +1527,7 @@ export default function App() {
     }
     setScanInFlight(true);
     try {
-      const result = await api.runScan(slug);
+      const result = await api.runScan(slug, { deep_scan: deepScan });
       await loadCompany(slug);
       if (result?.scan_id) {
         setSelectedScanId(result.scan_id);
@@ -1351,6 +1566,19 @@ export default function App() {
       setError(err.message || "Request failed");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function persistSectionHeight(which, ref) {
+    const node = ref.current;
+    if (!node) return;
+    const next = Math.round(node.getBoundingClientRect().height);
+    if (which === "customer") {
+      setCustomerHeight(next);
+      window.localStorage.setItem("asm.customer.height", String(next));
+    } else {
+      setScansHeight(next);
+      window.localStorage.setItem("asm.scans.height", String(next));
     }
   }
 
@@ -1515,7 +1743,15 @@ export default function App() {
             </div>
           ) : (
             <>
-              <section className={`card ${customerSectionOpen ? "" : "collapsed"}`}>
+              <section
+                ref={customerCardRef}
+                className={`card ${customerSectionOpen ? "resizable-card" : "collapsed"}`}
+                style={
+                  customerSectionOpen && customerHeight ? { height: customerHeight } : undefined
+                }
+                onMouseUp={() => persistSectionHeight("customer", customerCardRef)}
+                onTouchEnd={() => persistSectionHeight("customer", customerCardRef)}
+              >
                 <div className="card-header">
                   <div>
                     <h1>{activeCompany.name}</h1>
@@ -1540,6 +1776,18 @@ export default function App() {
                     >
                       Manage details
                     </button>
+                    <label className="checkbox-toggle">
+                      <input
+                        type="checkbox"
+                        checked={deepScan}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          setDeepScan(next);
+                          window.localStorage.setItem("asm.scan.deep", String(next));
+                        }}
+                      />
+                      Deep scan
+                    </label>
                     <button
                       disabled={scanBlocked}
                       onClick={() =>
@@ -1609,7 +1857,17 @@ export default function App() {
                 ) : null}
               </section>
 
-              <section className="card">
+              <section
+                ref={scansCardRef}
+                className={`card ${scansSectionOpen ? "resizable-card" : ""}`}
+                style={
+                  scansSectionOpen && scansHeight && !artifacts
+                    ? { height: scansHeight }
+                    : undefined
+                }
+                onMouseUp={() => persistSectionHeight("scans", scansCardRef)}
+                onTouchEnd={() => persistSectionHeight("scans", scansCardRef)}
+              >
                 <div className="card-header">
                   <div>
                     <h2>Scans</h2>
@@ -1628,6 +1886,18 @@ export default function App() {
                     >
                       {scansSectionOpen ? "Minimize" : "Expand"}
                     </button>
+                    <label className="checkbox-toggle">
+                      <input
+                        type="checkbox"
+                        checked={deepScan}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          setDeepScan(next);
+                          window.localStorage.setItem("asm.scan.deep", String(next));
+                        }}
+                      />
+                      Deep scan
+                    </label>
                     <button
                       disabled={scanBlocked}
                       onClick={() =>
@@ -1654,7 +1924,7 @@ export default function App() {
                 </div>
 
                 {scansSectionOpen ? (
-                  <div className="scan-stack">
+                  <div className={`scan-stack ${artifacts ? "with-artifacts" : ""}`.trim()}>
                     <div className={`scan-list ${artifacts ? "blurred" : ""}`}>
                       {scans.length === 0 ? (
                         <div className="empty empty-with-action">
@@ -1669,6 +1939,18 @@ export default function App() {
                           >
                             Start first scan
                           </button>
+                          <label className="checkbox-toggle">
+                            <input
+                              type="checkbox"
+                              checked={deepScan}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                setDeepScan(next);
+                                window.localStorage.setItem("asm.scan.deep", String(next));
+                              }}
+                            />
+                            Deep scan
+                          </label>
                         </div>
                       ) : (
                         scans.map((scan) => (
@@ -1734,6 +2016,17 @@ export default function App() {
                                 ? `Scan #${activeScan.company_scan_number}`
                                 : "Selected scan"}
                             </div>
+                            {artifacts.change_summary?.has_previous ? (
+                              <div className="muted">
+                                Changes: +{artifacts.change_summary.new_domains?.length ?? 0} / -
+                                {artifacts.change_summary.removed_domains?.length ?? 0}
+                              </div>
+                            ) : null}
+                            {artifacts.ct_enrichment?.suspicious_hostnames?.length ? (
+                              <div className="muted">
+                                CT suspicious hosts: {artifacts.ct_enrichment.suspicious_hostnames.length}
+                              </div>
+                            ) : null}
                           </div>
                           <button
                             className="ghost"
@@ -1749,6 +2042,45 @@ export default function App() {
                           artifacts={artifacts}
                           maxLabelCap={maxLabelCap}
                         />
+                        {artifacts.change_summary?.has_previous ? (
+                          <details className="graph-details">
+                            <summary>Change summary</summary>
+                            <div className="graph-records">
+                              <div className="graph-record-row">
+                                <span>New domains</span>
+                                <span>{artifacts.change_summary.new_domains?.length ?? 0}</span>
+                              </div>
+                              <div className="graph-record-row">
+                                <span>Removed domains</span>
+                                <span>{artifacts.change_summary.removed_domains?.length ?? 0}</span>
+                              </div>
+                              {artifacts.change_summary.provider_changes?.length ? (
+                                <div className="graph-record-row">
+                                  <span>Provider changes</span>
+                                  <span>{artifacts.change_summary.provider_changes.length}</span>
+                                </div>
+                              ) : null}
+                              {artifacts.change_summary.technology_changes?.length ? (
+                                <div className="graph-record-row">
+                                  <span>Technology changes</span>
+                                  <span>{artifacts.change_summary.technology_changes.length}</span>
+                                </div>
+                              ) : null}
+                              {artifacts.wildcard?.wildcard_roots?.length ? (
+                                <div className="graph-record-row">
+                                  <span>Wildcard roots</span>
+                                  <span>{artifacts.wildcard.wildcard_roots.length}</span>
+                                </div>
+                              ) : null}
+                              {artifacts.ct_enrichment?.suspicious_hostnames?.length ? (
+                                <div className="graph-record-row">
+                                  <span>CT suspicious hosts</span>
+                                  <span>{artifacts.ct_enrichment.suspicious_hostnames.length}</span>
+                                </div>
+                              ) : null}
+                            </div>
+                          </details>
+                        ) : null}
                         <details>
                           <summary className="muted">Raw JSON artifacts</summary>
                           <pre className="code">

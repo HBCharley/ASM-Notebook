@@ -147,6 +147,7 @@ Notes:
   - Slug is auto-generated uniquely on create
 - Customer details (rename + domains) live in a modal (`Manage details`)
 - Customer and Scans sections can be minimized; state is saved in local storage
+- Customer and Scans sections are vertically resizable; heights persist in local storage
 - Scan execution:
   - Starting a scan shows an in-progress visualization
   - New scan starts are blocked while a scan is running

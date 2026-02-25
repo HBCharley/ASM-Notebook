@@ -329,6 +329,13 @@ button.danger.ghost {
   padding-bottom: 12px;
 }
 
+.resizable-card {
+  position: relative;
+  resize: vertical;
+  overflow: auto;
+  min-height: 160px;
+}
+
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -410,6 +417,10 @@ button.danger.ghost {
   min-height: 240px;
 }
 
+.scan-stack.with-artifacts {
+  min-height: min(70vh, 820px);
+}
+
 .artifact-overlay {
   position: absolute;
   inset: 0;
@@ -458,6 +469,21 @@ button.danger.ghost {
 .scan-actions {
   display: flex;
   gap: 8px;
+}
+
+.checkbox-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.checkbox-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
 }
 
 .code {

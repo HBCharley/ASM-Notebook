@@ -53,7 +53,11 @@ export const api = {
   deleteCompany: (slug) => request(`/companies/${slug}`, { method: "DELETE" }),
   listScans: (slug) => request(`/companies/${slug}/scans`),
   latestScan: (slug) => request(`/companies/${slug}/scans/latest`),
-  runScan: (slug) => request(`/companies/${slug}/scans`, { method: "POST" }),
+  runScan: (slug, payload = {}) =>
+    request(`/companies/${slug}/scans`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
   getScan: (slug, id) => request(`/companies/${slug}/scans/${id}`),
   getArtifacts: (slug, id) => request(`/companies/${slug}/scans/${id}/artifacts`),
   deleteScan: (slug, id) =>
