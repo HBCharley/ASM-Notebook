@@ -364,6 +364,11 @@ $env:ASM_TEST_MODE = "1"
 poetry run python -m pytest -q
 ```
 
+## Formatting & Line Endings
+
+- Python files are formatted with Black.
+- `.gitattributes` enforces LF line endings for source files to keep GitHub raw views readable.
+
 ## Known Gaps
 
 - No service layer yet (scan logic is in the API/CLI).

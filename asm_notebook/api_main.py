@@ -95,7 +95,9 @@ def _is_test_mode() -> bool:
 
 
 def _company_by_slug(session: SessionLocal, slug: str) -> Company | None:
-    return session.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+    return session.execute(
+        select(Company).where(Company.slug == slug)
+    ).scalar_one_or_none()
 
 
 def _provider_hints(rec: dict[str, Any]) -> list[str]:
@@ -366,6 +368,7 @@ def _cve_findings(reported_versions: list[dict[str, str]]) -> list[dict[str, str
             findings.append({"component": name, "version": version, **row})
     return findings
 
+
 def _flatten_cert_entity(entity: Any) -> str:
     if not entity:
         return ""
@@ -401,7 +404,9 @@ def _detect_edge_provider(
     x_cache = str(headers.get("x-cache", "")).lower()
     x_served_by = str(headers.get("x-served-by", "")).lower()
     x_powered_by = str(headers.get("x-powered-by", "")).lower()
-    tls_issuer = _flatten_cert_entity((web.get("tls") or {}).get("cert", {}).get("issuer", "")).lower()
+    tls_issuer = _flatten_cert_entity(
+        (web.get("tls") or {}).get("cert", {}).get("issuer", "")
+    ).lower()
 
     signals: dict[str, list[str]] = {}
 
@@ -410,7 +415,12 @@ def _detect_edge_provider(
 
     cname_map = {
         "cloudfront": ["cloudfront.net"],
-        "akamai": ["akamaiedge.net", "akamaitechnologies.com", "edgesuite.net", "edgekey.net"],
+        "akamai": [
+            "akamaiedge.net",
+            "akamaitechnologies.com",
+            "edgesuite.net",
+            "edgekey.net",
+        ],
         "cloudflare": ["cloudflare.net"],
         "fastly": ["fastly.net", "fastlylb.net"],
         "azure-cdn": ["azureedge.net"],
@@ -430,7 +440,11 @@ def _detect_edge_provider(
 
     if "cloudflare" in server or headers.get("cf-ray"):
         add("cloudflare", "header:cf-ray/server")
-    if "akamai" in server or headers.get("x-akamai-transformed") or headers.get("akamai-origin-hop"):
+    if (
+        "akamai" in server
+        or headers.get("x-akamai-transformed")
+        or headers.get("akamai-origin-hop")
+    ):
         add("akamai", "header:akamai")
     if "fastly" in via or "fastly" in x_served_by or headers.get("x-fastly-request-id"):
         add("fastly", "header:fastly")
@@ -479,14 +493,22 @@ def _detect_edge_provider(
                 asn_signals.setdefault(provider, []).append(f"asn:{asn}")
 
     if not signals:
-        return {"provider": "", "confidence": "none", "signals": [], "asn_provider": "", "asn_signals": []}
+        return {
+            "provider": "",
+            "confidence": "none",
+            "signals": [],
+            "asn_provider": "",
+            "asn_signals": [],
+        }
 
     ranked = sorted(signals.items(), key=lambda kv: len(kv[1]), reverse=True)
     provider, provider_signals = ranked[0]
     asn_provider = ""
     asn_provider_signals: list[str] = []
     if asn_signals:
-        ranked_asn = sorted(asn_signals.items(), key=lambda kv: len(kv[1]), reverse=True)
+        ranked_asn = sorted(
+            asn_signals.items(), key=lambda kv: len(kv[1]), reverse=True
+        )
         asn_provider, asn_provider_signals = ranked_asn[0]
     confidence = "low"
     if any(s.startswith("cname:") for s in provider_signals):
@@ -505,7 +527,9 @@ def _detect_edge_provider(
     }
 
 
-def _edge_and_server(domain: str, rec: dict[str, Any], web: dict[str, Any] | None) -> dict[str, Any]:
+def _edge_and_server(
+    domain: str, rec: dict[str, Any], web: dict[str, Any] | None
+) -> dict[str, Any]:
     web = web or {}
     headers = (web.get("headers") or {}) if isinstance(web, dict) else {}
     server = headers.get("server", "")
@@ -697,7 +721,9 @@ def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "dmarc_policy": dict(sorted(dmarc_policy.items())),
         "mta_sts_domains": sum(1 for r in intel_rows if r.get("has_mta_sts")),
         "bimi_domains": sum(1 for r in intel_rows if r.get("has_bimi")),
-        "dkim_domains": sum(1 for r in intel_rows if (r.get("dkim_txt_records") or 0) > 0),
+        "dkim_domains": sum(
+            1 for r in intel_rows if (r.get("dkim_txt_records") or 0) > 0
+        ),
         "caa_domains": sum(1 for r in intel_rows if r.get("has_caa")),
         "ipv4_domains": sum(1 for r in intel_rows if r.get("has_ipv4")),
         "ipv6_domains": sum(1 for r in intel_rows if r.get("has_ipv6")),
@@ -714,9 +740,11 @@ def _intel_summary(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "provider_hints": dict(sorted(providers.items())),
         "mail_providers": dict(sorted(mail_providers.items())),
         "surface_classes": dict(sorted(surfaces.items())),
-        "exposure_score_avg": round(sum(exposure_scores) / len(exposure_scores), 2)
-        if exposure_scores
-        else 0,
+        "exposure_score_avg": (
+            round(sum(exposure_scores) / len(exposure_scores), 2)
+            if exposure_scores
+            else 0
+        ),
     }
 
 
@@ -737,14 +765,22 @@ def _change_summary(
     for domain in sorted(current_domains & prev_domains):
         cur = current_by_domain[domain]
         prev = prev_by_domain[domain]
-        cur_provider = (cur.get("web", {}).get("edge_provider") or {}).get("provider", "")
-        prev_provider = (prev.get("web", {}).get("edge_provider") or {}).get("provider", "")
+        cur_provider = (cur.get("web", {}).get("edge_provider") or {}).get(
+            "provider", ""
+        )
+        prev_provider = (prev.get("web", {}).get("edge_provider") or {}).get(
+            "provider", ""
+        )
         if cur_provider != prev_provider:
             provider_changes.append(
                 {"domain": domain, "from": prev_provider, "to": cur_provider}
             )
-        cur_tech = {t.get("name") for t in (cur.get("web", {}).get("technologies") or [])}
-        prev_tech = {t.get("name") for t in (prev.get("web", {}).get("technologies") or [])}
+        cur_tech = {
+            t.get("name") for t in (cur.get("web", {}).get("technologies") or [])
+        }
+        prev_tech = {
+            t.get("name") for t in (prev.get("web", {}).get("technologies") or [])
+        }
         if cur_tech != prev_tech:
             tech_changes.append(
                 {
@@ -760,6 +796,7 @@ def _change_summary(
         "provider_changes": provider_changes,
         "technology_changes": tech_changes,
     }
+
 
 async def _collect_scan_data(
     roots: set[str],
@@ -835,7 +872,9 @@ async def _collect_scan_data(
     web_targets = [
         d
         for d in resolvable_domains
-        if (dns_by_domain.get(d, {}).get("ips") or dns_by_domain.get(d, {}).get("CNAME"))
+        if (
+            dns_by_domain.get(d, {}).get("ips") or dns_by_domain.get(d, {}).get("CNAME")
+        )
     ]
     if progress_cb:
         note = "Checking HTTP metadata"
@@ -907,7 +946,15 @@ def _collect_scan_data_test_mode(
                 "PTR": {},
             }
         )
-    return domains_sorted, resolvable_domains, dns_records, [], {}, {"roots": [], "ct_hostnames": 0, "suspicious_hostnames": []}, {}
+    return (
+        domains_sorted,
+        resolvable_domains,
+        dns_records,
+        [],
+        {},
+        {"roots": [], "ct_hostnames": 0, "suspicious_hostnames": []},
+        {},
+    )
 
 
 def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> None:
@@ -933,9 +980,7 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 cname_resolves,
                 ct_enrichment,
                 wildcard_roots,
-            ) = _collect_scan_data_test_mode(
-                roots_set
-            )
+            ) = _collect_scan_data_test_mode(roots_set)
         else:
             set_progress(2, 6, "Collecting in-scope domains from CT")
             (
@@ -947,7 +992,9 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 ct_enrichment,
                 wildcard_roots,
             ) = asyncio.run(
-                _collect_scan_data(roots_set, progress_cb=set_progress, deep_scan=deep_scan)
+                _collect_scan_data(
+                    roots_set, progress_cb=set_progress, deep_scan=deep_scan
+                )
             )
 
         set_progress(3, 6, "Persisting domains and DNS artifacts")
@@ -967,9 +1014,15 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 if existing:
                     existing.json_text = txt
                 else:
-                    s.add(ScanArtifact(scan_id=scan_id, artifact_type=atype, json_text=txt))
+                    s.add(
+                        ScanArtifact(
+                            scan_id=scan_id, artifact_type=atype, json_text=txt
+                        )
+                    )
 
-            unique_ips = sorted({ip for rec in dns_records for ip in rec.get("ips", [])})
+            unique_ips = sorted(
+                {ip for rec in dns_records for ip in rec.get("ips", [])}
+            )
             resolved_domains = sum(1 for rec in dns_records if rec.get("ips"))
             upsert_artifact(
                 "domains",
@@ -986,7 +1039,8 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                     "summary": {
                         "scanned_domains": len(resolvable_domains),
                         "resolved_domains": resolved_domains,
-                        "unresolved_domains": len(resolvable_domains) - resolved_domains,
+                        "unresolved_domains": len(resolvable_domains)
+                        - resolved_domains,
                         "unique_ip_count": len(unique_ips),
                         "unique_ips": unique_ips,
                     },
@@ -1014,7 +1068,9 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 "wildcard",
                 {
                     "roots": sorted(roots_set),
-                    "wildcard_roots": sorted([r for r, ok in wildcard_roots.items() if ok]),
+                    "wildcard_roots": sorted(
+                        [r for r, ok in wildcard_roots.items() if ok]
+                    ),
                 },
             )
             upsert_artifact(
@@ -1027,7 +1083,9 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
             set_progress(5, 6, "Computing intel summary")
             dns_by_domain = {r.get("domain"): r for r in dns_records}
             web_by_domain = {w.get("domain"): w for w in web_records}
-            unique_ips = sorted({ip for rec in dns_records for ip in rec.get("ips", [])})
+            unique_ips = sorted(
+                {ip for rec in dns_records for ip in rec.get("ips", [])}
+            )
             set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
             asn_by_ip = lookup_asn_for_ips(unique_ips)
             intel_rows = [
@@ -1104,7 +1162,9 @@ def create_company(payload: CompanyCreate) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="slug, name, domains are required")
 
     with SessionLocal() as s:
-        existing = s.execute(select(Company).where(Company.slug == slug)).scalar_one_or_none()
+        existing = s.execute(
+            select(Company).where(Company.slug == slug)
+        ).scalar_one_or_none()
         if existing:
             raise HTTPException(status_code=409, detail="Company slug already exists")
 
@@ -1158,12 +1218,21 @@ def update_company(slug: str, payload: CompanyUpdate) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Company not found")
         c.name = name
         s.commit()
-        return {"id": c.id, "slug": c.slug, "name": c.name, "domains": [d.domain for d in c.domains]}
+        return {
+            "id": c.id,
+            "slug": c.slug,
+            "name": c.name,
+            "domains": [d.domain for d in c.domains],
+        }
 
 
 @app.put("/companies/{slug}/domains")
 def replace_domains(slug: str, payload: DomainReplace) -> dict[str, Any]:
-    domains = list(dict.fromkeys([_normalize_domain(d) for d in payload.domains if d and d.strip()]))
+    domains = list(
+        dict.fromkeys(
+            [_normalize_domain(d) for d in payload.domains if d and d.strip()]
+        )
+    )
     if not domains:
         raise HTTPException(status_code=400, detail="domains must not be empty")
 
@@ -1205,10 +1274,11 @@ def trigger_scan(
         if not roots:
             raise HTTPException(status_code=400, detail="Company has no domains")
 
-        last_num = (
-            s.execute(select(func.max(ScanRun.company_scan_number)).where(ScanRun.company_id == company.id))
-            .scalar_one()
-        )
+        last_num = s.execute(
+            select(func.max(ScanRun.company_scan_number)).where(
+                ScanRun.company_id == company.id
+            )
+        ).scalar_one()
         next_num = (last_num or 0) + 1
 
         scan = ScanRun(
@@ -1239,7 +1309,11 @@ def list_scans(slug: str) -> list[dict[str, Any]]:
             raise HTTPException(status_code=404, detail="Company not found")
 
         scans = (
-            s.execute(select(ScanRun).where(ScanRun.company_id == company.id).order_by(ScanRun.id.desc()))
+            s.execute(
+                select(ScanRun)
+                .where(ScanRun.company_id == company.id)
+                .order_by(ScanRun.id.desc())
+            )
             .scalars()
             .all()
         )
@@ -1264,7 +1338,12 @@ def get_latest_scan(slug: str) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Company not found")
 
         scan = (
-            s.execute(select(ScanRun).where(ScanRun.company_id == company.id).order_by(ScanRun.id.desc()).limit(1))
+            s.execute(
+                select(ScanRun)
+                .where(ScanRun.company_id == company.id)
+                .order_by(ScanRun.id.desc())
+                .limit(1)
+            )
             .scalars()
             .first()
         )
@@ -1288,7 +1367,9 @@ def get_company_scan(slug: str, scan_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Company not found")
 
         scan = s.execute(
-            select(ScanRun).where(ScanRun.id == scan_id, ScanRun.company_id == company.id)
+            select(ScanRun).where(
+                ScanRun.id == scan_id, ScanRun.company_id == company.id
+            )
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
@@ -1335,12 +1416,18 @@ def get_company_scan_artifacts(slug: str, scan_id: int) -> dict[str, Any]:
             raise HTTPException(status_code=404, detail="Company not found")
 
         scan = s.execute(
-            select(ScanRun).where(ScanRun.id == scan_id, ScanRun.company_id == company.id)
+            select(ScanRun).where(
+                ScanRun.id == scan_id, ScanRun.company_id == company.id
+            )
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
 
-        artifacts = s.execute(select(ScanArtifact).where(ScanArtifact.scan_id == scan_id)).scalars().all()
+        artifacts = (
+            s.execute(select(ScanArtifact).where(ScanArtifact.scan_id == scan_id))
+            .scalars()
+            .all()
+        )
         out: dict[str, Any] = {}
         for a in artifacts:
             try:
@@ -1358,7 +1445,9 @@ def delete_company_scan(slug: str, scan_id: int) -> None:
             raise HTTPException(status_code=404, detail="Company not found")
 
         scan = s.execute(
-            select(ScanRun).where(ScanRun.id == scan_id, ScanRun.company_id == company.id)
+            select(ScanRun).where(
+                ScanRun.id == scan_id, ScanRun.company_id == company.id
+            )
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")

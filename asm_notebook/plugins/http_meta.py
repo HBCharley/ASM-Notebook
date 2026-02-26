@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 import socket
 import ssl
 import struct
-import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
+from cryptography import x509
 
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -342,6 +341,45 @@ def _parse_cert_datetime(value: str | None) -> str:
         return value
 
 
+def _format_x509_name(name: x509.Name) -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
+    for attr in name:
+        oid = attr.oid
+        label = oid._name if hasattr(oid, "_name") and oid._name else oid.dotted_string
+        result.append((label, attr.value))
+    return result
+
+
+def _parse_x509_pem(pem: str) -> dict[str, Any]:
+    cert = x509.load_pem_x509_certificate(pem.encode("utf-8"))
+    not_before = cert.not_valid_before
+    not_after = cert.not_valid_after
+    if not_before.tzinfo is None:
+        not_before = not_before.replace(tzinfo=timezone.utc)
+    if not_after.tzinfo is None:
+        not_after = not_after.replace(tzinfo=timezone.utc)
+    sans: list[str] = []
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        for name in ext.value:
+            if isinstance(name, x509.DNSName):
+                sans.append(f"DNS:{name.value}")
+            elif isinstance(name, x509.IPAddress):
+                sans.append(f"IP:{name.value}")
+            else:
+                sans.append(str(name.value))
+    except Exception:
+        sans = []
+    return {
+        "subject": _format_x509_name(cert.subject),
+        "issuer": _format_x509_name(cert.issuer),
+        "serial_number": format(cert.serial_number, "x"),
+        "not_before": not_before.isoformat(),
+        "not_after": not_after.isoformat(),
+        "san": sans,
+    }
+
+
 def _fetch_tls_info(host: str, port: int = 443) -> dict[str, Any]:
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -357,31 +395,17 @@ def _fetch_tls_info(host: str, port: int = 443) -> dict[str, Any]:
             serial_number = cert.get("serialNumber", "")
 
             if not not_before and not not_after:
-                tmp_path = ""
                 try:
                     pem = ssl.get_server_certificate((host, port))
-                    with tempfile.NamedTemporaryFile("w+", delete=False) as fp:
-                        fp.write(pem)
-                        fp.flush()
-                        tmp_path = fp.name
-                    decoded = ssl._ssl._test_decode_cert(tmp_path)
-                    subject = decoded.get("subject", subject)
-                    issuer = decoded.get("issuer", issuer)
-                    sans = [
-                        f"{t}:{v}"
-                        for t, v in (decoded.get("subjectAltName") or [])
-                    ]
-                    serial_number = decoded.get("serialNumber", serial_number)
-                    not_before = _parse_cert_datetime(decoded.get("notBefore"))
-                    not_after = _parse_cert_datetime(decoded.get("notAfter"))
+                    parsed = _parse_x509_pem(pem)
+                    subject = parsed.get("subject", subject)
+                    issuer = parsed.get("issuer", issuer)
+                    sans = parsed.get("san", sans)
+                    serial_number = parsed.get("serial_number", serial_number)
+                    not_before = parsed.get("not_before", not_before)
+                    not_after = parsed.get("not_after", not_after)
                 except Exception:
                     pass
-                finally:
-                    if tmp_path:
-                        try:
-                            os.unlink(tmp_path)
-                        except Exception:
-                            pass
 
             return {
                 "protocol": ssock.version(),

@@ -9,3 +9,4 @@ uvicorn
 psycopg[binary]
 alembic
 ipwhois
+cryptography

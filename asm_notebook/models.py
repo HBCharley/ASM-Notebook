@@ -4,6 +4,7 @@ from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, UniqueConstr
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
+
 class Company(Base):
     __tablename__ = "companies"
 
@@ -12,12 +13,19 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    domains: Mapped[list["CompanyDomain"]] = relationship(back_populates="company", cascade="all, delete-orphan")
-    scans: Mapped[list["ScanRun"]] = relationship(back_populates="company", cascade="all, delete-orphan")
+    domains: Mapped[list["CompanyDomain"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+    scans: Mapped[list["ScanRun"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+
 
 class CompanyDomain(Base):
     __tablename__ = "company_domains"
-    __table_args__ = (UniqueConstraint("company_id", "domain", name="uq_company_domain"),)
+    __table_args__ = (
+        UniqueConstraint("company_id", "domain", name="uq_company_domain"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
@@ -25,10 +33,13 @@ class CompanyDomain(Base):
 
     company: Mapped["Company"] = relationship(back_populates="domains")
 
+
 class ScanRun(Base):
     __tablename__ = "scan_runs"
     __table_args__ = (
-        UniqueConstraint("company_id", "company_scan_number", name="uq_company_scan_number"),
+        UniqueConstraint(
+            "company_id", "company_scan_number", name="uq_company_scan_number"
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -36,15 +47,22 @@ class ScanRun(Base):
     company_scan_number: Mapped[int] = mapped_column(Integer, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="running")  # running/success/failed
+    status: Mapped[str] = mapped_column(
+        String(32), default="running"
+    )  # running/success/failed
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     company: Mapped["Company"] = relationship(back_populates="scans")
-    artifacts: Mapped[list["ScanArtifact"]] = relationship(back_populates="scan", cascade="all, delete-orphan")
+    artifacts: Mapped[list["ScanArtifact"]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
+
 
 class ScanArtifact(Base):
     __tablename__ = "scan_artifacts"
-    __table_args__ = (UniqueConstraint("scan_id", "artifact_type", name="uq_scan_artifact_type"),)
+    __table_args__ = (
+        UniqueConstraint("scan_id", "artifact_type", name="uq_scan_artifact_type"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     scan_id: Mapped[int] = mapped_column(ForeignKey("scan_runs.id"), index=True)
