@@ -42,6 +42,15 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - `ASM_NVD_DISABLE=1` to skip CVE lookups
 - Cache warm-up: run any scan once (or hit any scan endpoint that returns artifacts) to trigger the initial NVD download.
 
+## ASN Lookups
+
+- ASN lookups use RDAP via `ipwhois`. You can cap socket wait time with:
+- `ASM_ASN_TIMEOUT_SECONDS` (default `8`)
+
+## Scan Timings
+
+- Each scan stores a `timings` artifact with per-step durations (seconds).
+
 ## Data Model
 
 - `Company`

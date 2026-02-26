@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from typing import Any
 
 try:
@@ -23,6 +24,10 @@ def lookup_asn_for_ips(ips: list[str]) -> dict[str, dict[str, Any]]:
         return {}
 
     results: dict[str, dict[str, Any]] = {}
+    try:
+        timeout_seconds = float(os.getenv("ASM_ASN_TIMEOUT_SECONDS", "8"))
+    except Exception:
+        timeout_seconds = 8.0
     for ip in ips:
         if ip in _ASN_CACHE:
             cached = _ASN_CACHE[ip]
@@ -30,7 +35,12 @@ def lookup_asn_for_ips(ips: list[str]) -> dict[str, dict[str, Any]]:
                 results[ip] = cached
             continue
         try:
-            data = IPWhois(ip).lookup_rdap()
+            prev_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(timeout_seconds)
+            try:
+                data = IPWhois(ip).lookup_rdap()
+            finally:
+                socket.setdefaulttimeout(prev_timeout)
             record = {
                 "ip": ip,
                 "asn": data.get("asn"),

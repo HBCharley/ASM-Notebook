@@ -44,6 +44,7 @@ _index_cache: dict[str, Any] = {
     "loaded_years": None,
     "index_by_product": {},
     "index_by_vendor_product": {},
+    "built": False,
 }
 
 
@@ -312,6 +313,7 @@ def _build_index(years: list[int]) -> None:
     _index_cache["loaded_years"] = years
     _index_cache["index_by_product"] = index_by_product
     _index_cache["index_by_vendor_product"] = index_by_vendor_product
+    _index_cache["built"] = True
 
 
 def _ensure_index() -> None:
@@ -319,7 +321,7 @@ def _ensure_index() -> None:
     now_year = datetime.utcnow().year
     years = [now_year - offset for offset in range(years_back)]
     cached = _index_cache.get("loaded_years")
-    if cached == years and _index_cache.get("index_by_product"):
+    if cached == years and _index_cache.get("built"):
         return
     _build_index(years)
 

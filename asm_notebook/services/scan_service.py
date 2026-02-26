@@ -6,6 +6,7 @@ import os
 import re
 from collections import Counter
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Callable
 
 import httpx
@@ -695,6 +696,8 @@ def _collect_scan_data_test_mode(
 
 def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> None:
     roots_set = set(roots)
+    timings: dict[str, float] = {}
+    t0 = perf_counter()
 
     def set_progress(step: int, total: int, message: str) -> None:
         with SessionLocal() as s:
@@ -719,6 +722,7 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
             ) = _collect_scan_data_test_mode(roots_set)
         else:
             set_progress(2, 6, "Collecting in-scope domains from CT")
+            t_step = perf_counter()
             (
                 domains_sorted,
                 resolvable_domains,
@@ -732,12 +736,14 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                     roots_set, progress_cb=set_progress, deep_scan=deep_scan
                 )
             )
+            timings["ct_dns_http_seconds"] = round(perf_counter() - t_step, 3)
 
-        set_progress(3, 6, "Persisting domains and DNS artifacts")
-        with SessionLocal() as s:
-            scan = s.get(ScanRun, scan_id)
-            if not scan:
-                return
+            set_progress(3, 6, "Persisting domains and DNS artifacts")
+            t_step = perf_counter()
+            with SessionLocal() as s:
+                scan = s.get(ScanRun, scan_id)
+                if not scan:
+                    return
 
             def upsert_artifact(atype: str, payload_obj: Any) -> None:
                 existing = s.execute(
@@ -783,8 +789,10 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 },
             )
             s.commit()
+            timings["persist_dns_seconds"] = round(perf_counter() - t_step, 3)
 
             set_progress(4, 6, "Persisting web metadata")
+            t_step = perf_counter()
             web_reachable = sum(1 for w in web_records if w.get("reachable"))
             upsert_artifact(
                 "web",
@@ -798,6 +806,7 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 },
             )
             s.commit()
+            timings["persist_web_seconds"] = round(perf_counter() - t_step, 3)
 
             upsert_artifact("ct_enrichment", ct_enrichment)
             upsert_artifact(
@@ -823,7 +832,10 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 {ip for rec in dns_records for ip in rec.get("ips", [])}
             )
             set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
+            t_asn = perf_counter()
             asn_by_ip = lookup_asn_for_ips(unique_ips)
+            timings["asn_lookup_seconds"] = round(perf_counter() - t_asn, 3)
+            t_intel = perf_counter()
             intel_rows = [
                 _domain_intel(
                     d,
@@ -836,6 +848,7 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 )
                 for d in domains_sorted
             ]
+            timings["intel_build_seconds"] = round(perf_counter() - t_intel, 3)
             prev_intel_rows: list[dict[str, Any]] | None = None
             prev_scan = s.execute(
                 select(ScanRun).where(
@@ -867,6 +880,8 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 "change_summary",
                 _change_summary(intel_rows, prev_intel_rows),
             )
+            timings["total_seconds"] = round(perf_counter() - t0, 3)
+            upsert_artifact("timings", timings)
 
             set_progress(6, 6, "Finalizing scan")
             scan.status = "success"
