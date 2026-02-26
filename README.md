@@ -164,7 +164,7 @@ Notes:
   - Root WHOIS (RDAP) shown in artifacts overlay (new scans)
   - Enriched fields shown per domain:
     - DNS posture: SPF/DMARC/MTA-STS/BIMI/DKIM/CNAME takeover checks, wildcard detection
-    - Web posture: security headers, HSTS, TLS/cert details, reported server versions
+    - Web posture: security headers, HSTS, TLS/cert details (best-effort), reported server versions
     - Fingerprints/tech: Wappalyzer-style hints + favicon hashes
     - Edge/CDN: provider signals + ASN mapping
     - Exposure scoring and change summary

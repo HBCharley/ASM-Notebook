@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import socket
 import ssl
 import struct
+import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -346,19 +348,50 @@ def _fetch_tls_info(host: str, port: int = 443) -> dict[str, Any]:
     ctx.verify_mode = ssl.CERT_NONE
     with socket.create_connection((host, port), timeout=4) as sock:
         with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-            cert = ssock.getpeercert()
+            cert = ssock.getpeercert() or {}
             subject = cert.get("subject", [])
             issuer = cert.get("issuer", [])
             sans = [f"{t}:{v}" for t, v in cert.get("subjectAltName", [])]
+            not_before = _parse_cert_datetime(cert.get("notBefore"))
+            not_after = _parse_cert_datetime(cert.get("notAfter"))
+            serial_number = cert.get("serialNumber", "")
+
+            if not not_before and not not_after:
+                tmp_path = ""
+                try:
+                    pem = ssl.get_server_certificate((host, port))
+                    with tempfile.NamedTemporaryFile("w+", delete=False) as fp:
+                        fp.write(pem)
+                        fp.flush()
+                        tmp_path = fp.name
+                    decoded = ssl._ssl._test_decode_cert(tmp_path)
+                    subject = decoded.get("subject", subject)
+                    issuer = decoded.get("issuer", issuer)
+                    sans = [
+                        f"{t}:{v}"
+                        for t, v in (decoded.get("subjectAltName") or [])
+                    ]
+                    serial_number = decoded.get("serialNumber", serial_number)
+                    not_before = _parse_cert_datetime(decoded.get("notBefore"))
+                    not_after = _parse_cert_datetime(decoded.get("notAfter"))
+                except Exception:
+                    pass
+                finally:
+                    if tmp_path:
+                        try:
+                            os.unlink(tmp_path)
+                        except Exception:
+                            pass
+
             return {
                 "protocol": ssock.version(),
                 "cipher": ssock.cipher()[0] if ssock.cipher() else "",
                 "cert": {
                     "subject": subject,
                     "issuer": issuer,
-                    "serial_number": cert.get("serialNumber", ""),
-                    "not_before": _parse_cert_datetime(cert.get("notBefore")),
-                    "not_after": _parse_cert_datetime(cert.get("notAfter")),
+                    "serial_number": serial_number,
+                    "not_before": not_before,
+                    "not_after": not_after,
                     "san": sans,
                 },
             }

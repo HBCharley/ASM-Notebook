@@ -469,6 +469,11 @@ button.danger.ghost {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 8px;
+  background: var(--card);
 }
 
 .artifact-actions {
@@ -908,6 +913,11 @@ button.danger.ghost {
   align-items: center;
   gap: 12px;
   margin-bottom: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-bottom: 8px;
+  background: var(--card);
 }
 
 .graph-hover-actions {
