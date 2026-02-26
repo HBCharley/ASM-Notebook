@@ -180,7 +180,8 @@ Notes:
 - Scan execution:
   - Starting a scan shows an in-progress visualization
   - New scan starts are blocked while a scan is running
-  - Deep scan toggle (fetches `favicon.ico`, `robots.txt`, `sitemap.xml`)
+  - Scans are tagged as `Standard` or `Deep` based on the toggle
+  - Deep scan toggle expands HTTP enrichment (additional paths + fingerprints)
 - Artifacts visualization:
   - Interactive hub/spoke graph for scope roots and discovered domains
   - Optional `Tree view` (`Scope Browser`) to navigate roots/domains and focus graph nodes
@@ -314,20 +315,28 @@ Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/by-number/1"
 
 ## Scan Execution Flow
 
+### Standard Scan (Deep Scan off)
+
 1. `POST /v1/companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
-2. Background worker collects subdomains via Certificate Transparency (`crt.sh`).
+2. Collect subdomains via Certificate Transparency (`crt.sh`).
 3. Scope-filter against root domains.
-4. Perform passive DNS resolution (A/AAAA/CNAME/MX/NS + TXT/CAA/NS/SOA as needed).
-5. Enrich DNS-derived intel (SPF/DMARC/MTA-STS/BIMI/DKIM, ASN lookup, takeover hints, wildcard detection).
-6. Perform HTTP metadata checks (status, headers, TLS, tech fingerprints, reported versions, edge/CDN signals).
-7. Optional deep scan (`favicon.ico`, `robots.txt`, `sitemap.xml`) when enabled.
-8. Persist artifacts:
-   - `domains`
-   - `dns`
-   - `web`
-   - `dns_intel`
-   - `ct_enrichment`
-   - `wildcard`
+4. Passive DNS resolution (A/AAAA/CNAME/MX/NS/TXT/CAA).
+5. Basic DNS intel (SPF/DMARC presence, MTA-STS, BIMI flags).
+6. Basic HTTP metadata (status, redirect chain, key headers) with tight limits.
+7. Edge/CDN/WAF inference from CNAME/headers/ASN (if available).
+8. Persist artifacts (`domains`, `dns`, `web`, `dns_intel`, `ct_enrichment`, `wildcard`).
+
+### Deep Scan (Deep Scan on)
+
+1. All Standard scan steps, plus:
+2. HTTP metadata expansion (body snippet, extra paths, tech fingerprinting).
+3. Favicon hash + known-app mapping.
+4. ASN enrichment + geo/org mapping for each IP.
+5. Reverse DNS per IP.
+6. Certificate parsing per host (SAN analysis).
+7. NVD/CVE correlation (only when version confidence is high).
+8. Change detection across scans (diff + churn metrics).
+9. Exposure scoring with more features.
    - `whois` (RDAP for root domains)
    - `change_summary`
 9. Update `ScanRun` progress notes during execution (e.g., `3/6 Persisting domains...`) and finalize status/timestamps (`success` or `failed`).
