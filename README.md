@@ -21,6 +21,8 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 
 - Canonical backend implementation lives in `asm_notebook/`.
 - Root-level files (`api_main.py`, `models.py`, `db.py`, `init_db.py`, `cli.py`) are compatibility shims that re-export from `asm_notebook/*`.
+- API routing/validation lives in `asm_notebook/api_main.py`.
+- Service-layer logic lives in `asm_notebook/services/` (`scan_service.py`, `company_service.py`).
 
 ## Core Principles
 
@@ -136,8 +138,10 @@ Open:
 
 Notes:
 
-- The frontend uses a Vite proxy to the backend for API routes (`/companies`, `/health`, plus legacy `/scan` passthrough in `vite.config.js`).
+- The frontend uses a Vite proxy to the backend for API routes (`/v1`, `/companies`, `/health` in `vite.config.js`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
+- API versioning: `/v1/*` routes are available; legacy unversioned routes still work.
+- Frontend can override the prefix with `VITE_API_PREFIX` (default `/v1`).
 
 ## Frontend UX
 
