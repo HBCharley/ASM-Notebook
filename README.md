@@ -40,6 +40,7 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - `ASM_NVD_YEARS` (default `2`)
 - `ASM_NVD_REFRESH=1` to force re-download
 - `ASM_NVD_DISABLE=1` to skip CVE lookups
+- Cache warm-up: run any scan once (or hit any scan endpoint that returns artifacts) to trigger the initial NVD download.
 
 ## Data Model
 

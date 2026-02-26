@@ -607,9 +607,10 @@ async def _collect_scan_data(
 ]:
     progress_cb = progress_cb or (lambda *args, **kwargs: None)
     progress_cb(2, 6, "Collecting in-scope domains from CT")
-    domains = set()
-    for root in roots:
-        domains.update(ct_subdomains(root))
+    domains: set[str] = set()
+    ct_results = await asyncio.gather(*[ct_subdomains(root) for root in roots])
+    for result in ct_results:
+        domains.update(result)
     domains_sorted = sorted({normalize_domain(d) for d in domains})
     progress_cb(2, 6, f"Resolving DNS for {len(domains_sorted)} domains")
     resolvable_domains = []
