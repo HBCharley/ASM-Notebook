@@ -46,13 +46,11 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 
 - ASN lookups use RDAP via `ipwhois`. You can cap socket wait time with:
 - `ASM_ASN_TIMEOUT_SECONDS` (default `5`)
-  - Per-scan override: pass `asn_timeout_seconds` in the scan request payload.
 
 ## HTTP Metadata Timeouts
 
 - HTTP metadata collection timeout (seconds):
 - `ASM_HTTP_TIMEOUT_SECONDS` (default `5`)
-  - Per-scan override: pass `http_timeout_seconds` in the scan request payload.
 
 ## Scan Timings
 

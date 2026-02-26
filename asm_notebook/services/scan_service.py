@@ -612,7 +612,6 @@ async def _collect_scan_data(
     progress_cb: Callable[[int, int, str], None] | None = None,
     deep_scan: bool = False,
     cancel_check: Callable[[], bool] | None = None,
-    http_timeout_seconds: float | None = None,
 ) -> tuple[
     list[str],
     list[str],
@@ -653,13 +652,7 @@ async def _collect_scan_data(
     for domain in resolvable_domains:
         if cancel_check():
             raise ScanCancelled()
-        web_records.append(
-            await fetch_http_metadata(
-                domain,
-                deep_scan=deep_scan,
-                timeout_seconds=http_timeout_seconds,
-            )
-        )
+        web_records.append(await fetch_http_metadata(domain, deep_scan=deep_scan))
 
     progress_cb(2, 6, "Resolving root wildcards")
     wildcard_roots: dict[str, bool] = {}
@@ -731,8 +724,6 @@ def _execute_scan(
     scan_id: int,
     roots: list[str],
     deep_scan: bool = False,
-    http_timeout_seconds: float | None = None,
-    asn_timeout_seconds: float | None = None,
 ) -> None:
     roots_set = set(roots)
     timings: dict[str, float] = {}
@@ -778,7 +769,6 @@ def _execute_scan(
                     progress_cb=set_progress,
                     deep_scan=deep_scan,
                     cancel_check=lambda: _is_cancelled(scan_id),
-                    http_timeout_seconds=http_timeout_seconds,
                 )
             )
             timings["ct_dns_http_seconds"] = round(perf_counter() - t_step, 3)
@@ -887,9 +877,7 @@ def _execute_scan(
             if deep_scan:
                 set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
                 t_asn = perf_counter()
-                asn_by_ip = lookup_asn_for_ips(
-                    unique_ips, timeout_seconds=asn_timeout_seconds
-                )
+                asn_by_ip = lookup_asn_for_ips(unique_ips)
                 timings["asn_lookup_seconds"] = round(perf_counter() - t_asn, 3)
             else:
                 asn_by_ip = {}
@@ -973,8 +961,6 @@ def trigger_scan(
     slug: str,
     background_tasks: BackgroundTasks,
     deep_scan: bool = False,
-    http_timeout_seconds: float | None = None,
-    asn_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     with SessionLocal() as s:
         company = _company_by_slug(s, slug)
@@ -1010,8 +996,6 @@ def trigger_scan(
                     {
                         "mode": "deep" if deep_scan else "standard",
                         "deep_scan": bool(deep_scan),
-                        "http_timeout_seconds": http_timeout_seconds,
-                        "asn_timeout_seconds": asn_timeout_seconds,
                     }
                 ),
             )
@@ -1023,8 +1007,6 @@ def trigger_scan(
         scan_id,
         sorted(roots),
         deep_scan,
-        http_timeout_seconds,
-        asn_timeout_seconds,
     )
     return {
         "company_slug": slug,

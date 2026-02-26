@@ -9,7 +9,6 @@ const GROUP_STORAGE_KEY = "asm.groups";
 const ACTIVE_USER_KEY = "asm.user.active";
 const COMPANY_GROUP_KEY = "asm.company.groups";
 const USER_THEME_KEY = "asm.user.theme";
-const USER_TIMEOUT_KEY = "asm.user.timeouts";
 const NEW_GROUP_OPTION = "__new_group__";
 
 function readStoredJson(key, fallback) {
@@ -42,22 +41,6 @@ function setThemeForUser(userId, theme) {
   writeStoredJson(USER_THEME_KEY, next);
 }
 
-function getTimeoutsForUser(userId) {
-  const map = readStoredJson(USER_TIMEOUT_KEY, {});
-  const key = userId || "__guest";
-  const value = map[key] || {};
-  return {
-    http: Number(value.http) || 5,
-    asn: Number(value.asn) || 5,
-  };
-}
-
-function setTimeoutsForUser(userId, timeouts) {
-  const map = readStoredJson(USER_TIMEOUT_KEY, {});
-  const key = userId || "__guest";
-  const next = { ...map, [key]: timeouts };
-  writeStoredJson(USER_TIMEOUT_KEY, next);
-}
 
 function makeId(prefix = "id") {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -1828,13 +1811,6 @@ export default function App() {
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [maxLabelCap, setMaxLabelCap] = useState(36);
-  const [httpTimeoutSeconds, setHttpTimeoutSeconds] = useState(
-    () => getTimeoutsForUser("").http
-  );
-  const [asnTimeoutSeconds, setAsnTimeoutSeconds] = useState(
-    () => getTimeoutsForUser("").asn
-  );
-
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerDomain, setNewCustomerDomain] = useState("");
   const [addDomainInput, setAddDomainInput] = useState("");
@@ -1996,8 +1972,6 @@ export default function App() {
     try {
       const result = await api.runScan(slug, {
         deep_scan: deepScan,
-        http_timeout_seconds: httpTimeoutSeconds,
-        asn_timeout_seconds: asnTimeoutSeconds,
       });
       await loadCompany(slug);
       if (result?.scan_id) {
@@ -2327,12 +2301,6 @@ export default function App() {
   useEffect(() => {
     const nextTheme = getThemeForUser(activeUserId || "");
     setTheme(nextTheme);
-  }, [activeUserId]);
-
-  useEffect(() => {
-    const timeouts = getTimeoutsForUser(activeUserId || "");
-    setHttpTimeoutSeconds(timeouts.http);
-    setAsnTimeoutSeconds(timeouts.asn);
   }, [activeUserId]);
 
   useEffect(() => {
@@ -3081,46 +3049,6 @@ export default function App() {
                   step="4"
                   value={maxLabelCap}
                   onChange={(e) => setMaxLabelCap(Number(e.target.value))}
-                />
-              </label>
-            </div>
-            <div className="settings-row">
-              <label>
-                Collecting HTTP media timeout (seconds)
-                <input
-                  type="number"
-                  min="1"
-                  max="60"
-                  step="1"
-                  value={httpTimeoutSeconds}
-                  onChange={(e) => {
-                    const next = Math.max(1, Number(e.target.value) || 1);
-                    setHttpTimeoutSeconds(next);
-                    setTimeoutsForUser(activeUserId || "", {
-                      http: next,
-                      asn: asnTimeoutSeconds,
-                    });
-                  }}
-                />
-              </label>
-            </div>
-            <div className="settings-row">
-              <label>
-                ASN Search Timeout (seconds)
-                <input
-                  type="number"
-                  min="1"
-                  max="60"
-                  step="1"
-                  value={asnTimeoutSeconds}
-                  onChange={(e) => {
-                    const next = Math.max(1, Number(e.target.value) || 1);
-                    setAsnTimeoutSeconds(next);
-                    setTimeoutsForUser(activeUserId || "", {
-                      http: httpTimeoutSeconds,
-                      asn: next,
-                    });
-                  }}
                 />
               </label>
             </div>
