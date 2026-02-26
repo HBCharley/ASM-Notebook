@@ -412,6 +412,7 @@ def _domain_intel(
     asn_by_ip: dict[str, dict[str, Any]] | None = None,
     cname_targets: dict[str, bool] | None = None,
     wildcard_roots: dict[str, bool] | None = None,
+    include_cve: bool = False,
 ) -> dict[str, Any]:
     d = normalize_domain(domain)
     root = next((r for r in sorted(roots) if d == r or d.endswith("." + r)), None)
@@ -509,7 +510,10 @@ def _domain_intel(
     exposure_score, exposure_factors = _compute_exposure_score(row)
     row["exposure_score"] = exposure_score
     row["exposure_factors"] = exposure_factors
-    row["cve_findings"] = _cve_findings(web_block.get("reported_versions") or [])
+    if include_cve:
+        row["cve_findings"] = _cve_findings(web_block.get("reported_versions") or [])
+    else:
+        row["cve_findings"] = []
     return row
 
 
@@ -637,7 +641,7 @@ async def _collect_scan_data(
     for domain in domains_sorted:
         if cancel_check():
             raise ScanCancelled()
-        rec = resolve_dns(domain)
+        rec = resolve_dns(domain, include_ptr=deep_scan)
         dns_records.append(rec)
         if rec.get("ips"):
             resolvable_domains.append(domain)
@@ -880,12 +884,15 @@ def _execute_scan(
             unique_ips = sorted(
                 {ip for rec in dns_records for ip in rec.get("ips", [])}
             )
-            set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
-            t_asn = perf_counter()
-            asn_by_ip = lookup_asn_for_ips(
-                unique_ips, timeout_seconds=asn_timeout_seconds
-            )
-            timings["asn_lookup_seconds"] = round(perf_counter() - t_asn, 3)
+            if deep_scan:
+                set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
+                t_asn = perf_counter()
+                asn_by_ip = lookup_asn_for_ips(
+                    unique_ips, timeout_seconds=asn_timeout_seconds
+                )
+                timings["asn_lookup_seconds"] = round(perf_counter() - t_asn, 3)
+            else:
+                asn_by_ip = {}
             if _is_cancelled(scan_id):
                 return
             t_intel = perf_counter()
@@ -898,6 +905,7 @@ def _execute_scan(
                     asn_by_ip=asn_by_ip,
                     cname_targets=cname_resolves,
                     wildcard_roots=wildcard_roots,
+                    include_cve=deep_scan,
                 )
                 for d in domains_sorted
             ]
@@ -991,12 +999,28 @@ def trigger_scan(
             started_at=_now_utc(),
         )
         s.add(scan)
+        s.flush()
+        scan_id = scan.id
+        scan_number = scan.company_scan_number
+        s.add(
+            ScanArtifact(
+                scan_id=scan_id,
+                artifact_type="scan_meta",
+                json_text=_json_dumps(
+                    {
+                        "mode": "deep" if deep_scan else "standard",
+                        "deep_scan": bool(deep_scan),
+                        "http_timeout_seconds": http_timeout_seconds,
+                        "asn_timeout_seconds": asn_timeout_seconds,
+                    }
+                ),
+            )
+        )
         s.commit()
-        s.refresh(scan)
 
     background_tasks.add_task(
         _execute_scan,
-        scan.id,
+        scan_id,
         sorted(roots),
         deep_scan,
         http_timeout_seconds,
@@ -1004,8 +1028,8 @@ def trigger_scan(
     )
     return {
         "company_slug": slug,
-        "scan_id": scan.id,
-        "company_scan_number": scan.company_scan_number,
+        "scan_id": scan_id,
+        "company_scan_number": scan_number,
         "status": "running",
     }
 
@@ -1025,6 +1049,24 @@ def list_scans(slug: str) -> list[dict[str, Any]]:
             .scalars()
             .all()
         )
+        scan_ids = [sc.id for sc in scans]
+        scan_meta: dict[int, dict[str, Any]] = {}
+        if scan_ids:
+            meta_rows = (
+                s.execute(
+                    select(ScanArtifact).where(
+                        ScanArtifact.scan_id.in_(scan_ids),
+                        ScanArtifact.artifact_type == "scan_meta",
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for row in meta_rows:
+                try:
+                    scan_meta[row.scan_id] = json.loads(row.json_text)
+                except Exception:
+                    scan_meta[row.scan_id] = {}
         return [
             {
                 "id": sc.id,
@@ -1033,6 +1075,7 @@ def list_scans(slug: str) -> list[dict[str, Any]]:
                 "started_at": sc.started_at,
                 "completed_at": sc.completed_at,
                 "notes": sc.notes,
+                "scan_mode": (scan_meta.get(sc.id) or {}).get("mode", ""),
             }
             for sc in scans
         ]
@@ -1056,6 +1099,18 @@ def get_latest_scan(slug: str) -> dict[str, Any]:
         )
         if not scan:
             raise HTTPException(status_code=404, detail="No scans for company")
+        scan_mode = ""
+        meta = s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id == scan.id,
+                ScanArtifact.artifact_type == "scan_meta",
+            )
+        ).scalar_one_or_none()
+        if meta:
+            try:
+                scan_mode = (json.loads(meta.json_text) or {}).get("mode", "")
+            except Exception:
+                scan_mode = ""
         return {
             "id": scan.id,
             "company_scan_number": scan.company_scan_number,
@@ -1063,6 +1118,7 @@ def get_latest_scan(slug: str) -> dict[str, Any]:
             "started_at": scan.started_at,
             "completed_at": scan.completed_at,
             "notes": scan.notes,
+            "scan_mode": scan_mode,
         }
 
 
@@ -1079,6 +1135,18 @@ def get_company_scan(slug: str, scan_id: int) -> dict[str, Any]:
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
+        scan_mode = ""
+        meta = s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id == scan.id,
+                ScanArtifact.artifact_type == "scan_meta",
+            )
+        ).scalar_one_or_none()
+        if meta:
+            try:
+                scan_mode = (json.loads(meta.json_text) or {}).get("mode", "")
+            except Exception:
+                scan_mode = ""
         return {
             "id": scan.id,
             "company_scan_number": scan.company_scan_number,
@@ -1086,6 +1154,7 @@ def get_company_scan(slug: str, scan_id: int) -> dict[str, Any]:
             "started_at": scan.started_at,
             "completed_at": scan.completed_at,
             "notes": scan.notes,
+            "scan_mode": scan_mode,
         }
 
 
@@ -1103,6 +1172,18 @@ def get_company_scan_by_number(slug: str, company_scan_number: int) -> dict[str,
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
+        scan_mode = ""
+        meta = s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id == scan.id,
+                ScanArtifact.artifact_type == "scan_meta",
+            )
+        ).scalar_one_or_none()
+        if meta:
+            try:
+                scan_mode = (json.loads(meta.json_text) or {}).get("mode", "")
+            except Exception:
+                scan_mode = ""
         return {
             "id": scan.id,
             "company_scan_number": scan.company_scan_number,
@@ -1110,6 +1191,7 @@ def get_company_scan_by_number(slug: str, company_scan_number: int) -> dict[str,
             "started_at": scan.started_at,
             "completed_at": scan.completed_at,
             "notes": scan.notes,
+            "scan_mode": scan_mode,
         }
 
 

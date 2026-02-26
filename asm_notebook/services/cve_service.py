@@ -338,6 +338,8 @@ def find_cves(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
     seen: set[str] = set()
 
     for entry in reported_versions or []:
+        if entry.get("confidence") not in (None, "high"):
+            continue
         raw_name = entry.get("name") or ""
         version = entry.get("version") or ""
         vendor, product = _normalize_vendor_product(raw_name)

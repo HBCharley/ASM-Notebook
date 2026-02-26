@@ -147,6 +147,7 @@ def _extract_reported_versions(
                     "name": m.group("name"),
                     "version": m.group("ver"),
                     "source": f"header:{header_key}",
+                    "confidence": "high",
                 }
             )
 
@@ -160,6 +161,7 @@ def _extract_reported_versions(
                     "name": m.group("name"),
                     "version": m.group("ver"),
                     "source": "meta:generator",
+                    "confidence": "medium",
                 }
             )
         else:
@@ -168,6 +170,7 @@ def _extract_reported_versions(
                     "name": content,
                     "version": "",
                     "source": "meta:generator",
+                    "confidence": "low",
                 }
             )
 
@@ -454,9 +457,12 @@ async def fetch_http_metadata(
             url = f"{scheme}://{domain}"
             try:
                 resp = await client.get(url)
-                body = resp.text[:6000] if resp.text else ""
-                m = _TITLE_RE.search(body)
-                title = m.group(1).strip() if m else ""
+                body = ""
+                title = ""
+                if deep_scan:
+                    body = resp.text[:6000] if resp.text else ""
+                    m = _TITLE_RE.search(body)
+                    title = m.group(1).strip() if m else ""
                 interesting = {}
                 for k in (
                     "server",
@@ -482,9 +488,15 @@ async def fetch_http_metadata(
                     if k in resp.headers:
                         security_headers[k] = resp.headers.get(k, "")
                 lowered_headers = {k.lower(): v for k, v in resp.headers.items()}
-                fingerprints = _fingerprint_html(body, lowered_headers)
-                reported_versions = _extract_reported_versions(lowered_headers, body)
-                technologies = _detect_technologies(body, lowered_headers)
+                fingerprints: list[str] = []
+                reported_versions: list[dict[str, str]] = []
+                technologies: list[dict[str, str]] = []
+                if deep_scan:
+                    fingerprints = _fingerprint_html(body, lowered_headers)
+                    reported_versions = _extract_reported_versions(
+                        lowered_headers, body
+                    )
+                    technologies = _detect_technologies(body, lowered_headers)
                 hsts = _parse_hsts(resp.headers.get("strict-transport-security"))
                 cloud_storage = _detect_cloud_storage(body, resp.url, lowered_headers)
                 tls_info: dict[str, Any] = {}

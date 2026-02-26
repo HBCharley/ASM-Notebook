@@ -85,6 +85,11 @@ function formatDuration(start, end) {
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function formatScanMode(mode) {
+  if (!mode) return "";
+  return mode === "deep" ? "Deep scan" : "Standard scan";
+}
+
 function parseScanProgress(scan) {
   if (!scan) {
     return null;
@@ -2644,7 +2649,12 @@ export default function App() {
 
                 {scanBlocked ? (
                   <div className="scan-progress">
-                    <div className="scan-progress-title">Scan in progress</div>
+                    <div className="scan-progress-title">
+                      Scan in progress
+                      {runningScan?.scan_mode
+                        ? ` · ${formatScanMode(runningScan.scan_mode)}`
+                        : ""}
+                    </div>
                     <div className="scan-progress-bar">
                       <span
                         className={`scan-progress-fill ${
@@ -2790,6 +2800,9 @@ export default function App() {
                                       scan.started_at,
                                       scan.completed_at
                                     )}`
+                                  : ""}
+                                {scan.scan_mode
+                                  ? ` · ${formatScanMode(scan.scan_mode)}`
                                   : ""}
                                 {scan.notes ? ` · ${scan.notes}` : ""}
                               </div>
