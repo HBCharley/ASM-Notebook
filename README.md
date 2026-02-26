@@ -161,6 +161,7 @@ Notes:
   - Hovering a hub/root shows a spoke list; clicking a spoke focuses that node
   - `Ctrl + Scroll` zooms graph, drag to pan, `Reset` restores view
   - Graph supports adaptive detail levels, label caps, and force layout for crowded scans
+  - Root WHOIS (RDAP) shown in artifacts overlay (new scans)
   - Enriched fields shown per domain:
     - DNS posture: SPF/DMARC/MTA-STS/BIMI/DKIM/CNAME takeover checks, wildcard detection
     - Web posture: security headers, HSTS, TLS/cert details, reported server versions
@@ -168,8 +169,16 @@ Notes:
     - Edge/CDN: provider signals + ASN mapping
     - Exposure scoring and change summary
     - Deep scan results (favicon/robots/sitemap response metadata)
+- Artifacts tools:
+  - Show source JSON per artifact and per domain detail panel
+  - Export full artifacts JSON to file
 - Theme:
-  - Global light/dark mode toggle in the top bar
+  - Light/dark toggle in Settings with per-user persistence
+- Multi-user (UI only):
+  - Switch between users (no real auth)
+  - Admins can manage users, groups, and company group assignments
+  - Settings includes an admin-only Manage companies panel for group assignment
+  - Standard users only see companies assigned to their group
 
 ## CLI
 
@@ -290,6 +299,7 @@ Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/by-number/1"
    - `dns_intel`
    - `ct_enrichment`
    - `wildcard`
+   - `whois` (RDAP for root domains)
    - `change_summary`
 9. Update `ScanRun` progress notes during execution (e.g., `3/6 Persisting domains...`) and finalize status/timestamps (`success` or `failed`).
 

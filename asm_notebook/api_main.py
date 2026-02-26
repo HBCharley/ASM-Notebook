@@ -8,6 +8,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -121,6 +122,74 @@ def _provider_hints(rec: dict[str, Any]) -> list[str]:
         if any(n in hay for n in needles):
             hints.append(name)
     return sorted(set(hints))
+
+
+def _rdap_entity_name(entity: dict[str, Any]) -> str | None:
+    vcard = entity.get("vcardArray")
+    if not isinstance(vcard, list) or len(vcard) < 2:
+        return None
+    for entry in vcard[1]:
+        if not isinstance(entry, list) or not entry:
+            continue
+        if entry[0] in {"fn", "org", "name"}:
+            if len(entry) > 3 and entry[3]:
+                return str(entry[3])
+            if len(entry) > 1 and entry[1]:
+                return str(entry[1])
+    return None
+
+
+def _fetch_domain_whois(roots: list[str]) -> list[dict[str, Any]]:
+    if _is_test_mode():
+        return []
+    results: list[dict[str, Any]] = []
+    with httpx.Client(timeout=10, follow_redirects=True) as client:
+        for root in roots:
+            try:
+                ascii_root = root.encode("idna").decode("ascii")
+            except Exception:
+                ascii_root = root
+            try:
+                resp = client.get(f"https://rdap.org/domain/{ascii_root}")
+                if resp.status_code != 200:
+                    results.append(
+                        {
+                            "domain": root,
+                            "error": f"RDAP {resp.status_code}",
+                        }
+                    )
+                    continue
+                data = resp.json()
+            except Exception as exc:
+                results.append({"domain": root, "error": str(exc)})
+                continue
+
+            registrar = None
+            for ent in data.get("entities") or []:
+                roles = ent.get("roles") or []
+                if "registrar" in roles:
+                    registrar = _rdap_entity_name(ent) or ent.get("handle")
+                    break
+            events = []
+            for ev in data.get("events") or []:
+                action = ev.get("eventAction")
+                date = ev.get("eventDate")
+                if action or date:
+                    events.append({"action": action, "date": date})
+            results.append(
+                {
+                    "domain": root,
+                    "registrar": registrar,
+                    "status": data.get("status") or [],
+                    "nameservers": [
+                        ns.get("ldhName")
+                        for ns in (data.get("nameservers") or [])
+                        if ns.get("ldhName")
+                    ],
+                    "events": events,
+                }
+            )
+    return results
 
 
 def _mx_providers(mx_records: list[str]) -> list[str]:
@@ -946,6 +1015,12 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 {
                     "roots": sorted(roots_set),
                     "wildcard_roots": sorted([r for r, ok in wildcard_roots.items() if ok]),
+                },
+            )
+            upsert_artifact(
+                "whois",
+                {
+                    "roots": _fetch_domain_whois(sorted(roots_set)),
                 },
             )
 

@@ -4,6 +4,49 @@ import logoLight from "./assets/logo-light.png";
 import logoDark from "./assets/logo-dark.png";
 
 const ADD_CUSTOMER_OPTION = "__add_customer__";
+const USER_STORAGE_KEY = "asm.users";
+const GROUP_STORAGE_KEY = "asm.groups";
+const ACTIVE_USER_KEY = "asm.user.active";
+const COMPANY_GROUP_KEY = "asm.company.groups";
+const USER_THEME_KEY = "asm.user.theme";
+const NEW_GROUP_OPTION = "__new_group__";
+
+function readStoredJson(key, fallback) {
+  if (typeof window === "undefined") return fallback;
+  const raw = window.localStorage.getItem(key);
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredJson(key, value) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(key, JSON.stringify(value));
+}
+
+function getThemeForUser(userId) {
+  const map = readStoredJson(USER_THEME_KEY, {});
+  if (userId && map[userId]) return map[userId];
+  return map.__guest || "light";
+}
+
+function setThemeForUser(userId, theme) {
+  const map = readStoredJson(USER_THEME_KEY, {});
+  const key = userId || "__guest";
+  const next = { ...map, [key]: theme };
+  writeStoredJson(USER_THEME_KEY, next);
+}
+
+function makeId(prefix = "id") {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 function formatDate(value) {
   if (!value) return "-";
@@ -133,6 +176,8 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const [selectedKey, setSelectedKey] = useState(null);
   const [treeOpen, setTreeOpen] = useState(false);
   const [hideUnreachable, setHideUnreachable] = useState(false);
+  const [graphSourceOpen, setGraphSourceOpen] = useState(false);
+  const [graphSourceKey, setGraphSourceKey] = useState("intel");
   const [expandedRoots, setExpandedRoots] = useState({});
   const [domainFilter, setDomainFilter] = useState("");
   const [zoom, setZoom] = useState(1);
@@ -636,17 +681,34 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
         .map((n) => [n.domain, { x: n.x, y: n.y }])
     );
     const domainsByRoot = new Map();
+    const targetMap = new Map();
     for (const node of result) {
       if (node.kind !== "domain" || node.hidden || !node.root) continue;
       if (!domainsByRoot.has(node.root)) domainsByRoot.set(node.root, []);
       domainsByRoot.get(node.root).push(node.key);
     }
-    const repelRadius = 26 + zoom * 5;
+    for (const [root, keys] of domainsByRoot) {
+      const rootPos = rootPositions.get(root);
+      if (!rootPos) continue;
+      const total = keys.length;
+      const baseRadius = 90 + Math.sqrt(total) * 8;
+      const spacing = 22;
+      keys.forEach((key, idx) => {
+        const node = result[indexByKey.get(key)];
+        const angle = Math.atan2(node.y - rootPos.y, node.x - rootPos.x);
+        const radius = baseRadius + spacing * Math.sqrt(idx + 1);
+        targetMap.set(key, {
+          x: rootPos.x + Math.cos(angle) * radius,
+          y: rootPos.y + Math.sin(angle) * radius,
+        });
+      });
+    }
+    const repelRadius = 38 + zoom * 7;
     const repelRadiusSq = repelRadius * repelRadius;
-    const spring = 0.004;
-    const damp = 0.92;
-    const step = 0.12;
-    const iterations = 28;
+    const spring = 0.01;
+    const damp = 0.86;
+    const step = 0.18;
+    const iterations = 48;
     for (const [root, keys] of domainsByRoot) {
       const rootPos = rootPositions.get(root);
       if (!rootPos || keys.length < 2) continue;
@@ -667,14 +729,20 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
             if (distSq > 0 && distSq < repelRadiusSq) {
               const dist = Math.sqrt(distSq);
               const force = (repelRadius - dist) / repelRadius;
-              fx += (dx / dist) * force * 1.6;
-              fy += (dy / dist) * force * 1.6;
+              fx += (dx / dist) * force * 2.8;
+              fy += (dy / dist) * force * 2.8;
             }
           }
-          const dxr = rootPos.x - ni.x;
-          const dyr = rootPos.y - ni.y;
-          fx += dxr * spring;
-          fy += dyr * spring;
+          const target = targetMap.get(ki);
+          if (target) {
+            fx += (target.x - ni.x) * spring;
+            fy += (target.y - ni.y) * spring;
+          } else {
+            const dxr = rootPos.x - ni.x;
+            const dyr = rootPos.y - ni.y;
+            fx += dxr * spring;
+            fy += dyr * spring;
+          }
           const v = velocities.get(ki);
           v.x = (v.x + fx * step) * damp;
           v.y = (v.y + fy * step) * damp;
@@ -789,6 +857,30 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const ptrValues = hoveredNode?.dns?.PTR
     ? Object.values(hoveredNode.dns.PTR).flat().filter(Boolean)
     : [];
+  const graphSourceOptions = useMemo(() => {
+    if (!hoveredNode) return [];
+    const options = [];
+    if (nodeIntel) options.push({ key: "intel", label: "Intel" });
+    if (hoveredNode.dns) options.push({ key: "dns", label: "DNS" });
+    if (nodeIntel?.web) options.push({ key: "web", label: "Web" });
+    return options;
+  }, [hoveredNode, nodeIntel]);
+  const graphSourcePayload =
+    graphSourceKey === "dns"
+      ? hoveredNode?.dns
+      : graphSourceKey === "web"
+        ? nodeIntel?.web
+        : nodeIntel;
+  useEffect(() => {
+    if (!graphSourceOptions.length) {
+      setGraphSourceOpen(false);
+      setGraphSourceKey("intel");
+      return;
+    }
+    if (!graphSourceOptions.some((opt) => opt.key === graphSourceKey)) {
+      setGraphSourceKey(graphSourceOptions[0].key);
+    }
+  }, [graphSourceOptions, graphSourceKey]);
   const securityHeaderKeys = nodeIntel?.web?.security_headers
     ? Object.keys(nodeIntel.web.security_headers)
     : [];
@@ -805,6 +897,18 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const exposureScore = nodeIntel?.exposure_score ?? null;
   const exposureFactors = nodeIntel?.exposure_factors || [];
   const cveFindings = nodeIntel?.cve_findings || [];
+  const certNotBefore =
+    tls?.cert?.not_before ||
+    tls?.cert?.notBefore ||
+    tls?.cert?.valid_from ||
+    tls?.cert?.validFrom ||
+    "";
+  const certNotAfter =
+    tls?.cert?.not_after ||
+    tls?.cert?.notAfter ||
+    tls?.cert?.valid_until ||
+    tls?.cert?.validUntil ||
+    "";
 
   function focusNode(node, targetZoom = Math.max(zoom, 2.1)) {
     const z = clampZoom(Math.max(targetZoom, 2.5));
@@ -1069,6 +1173,13 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                 </div>
               </div>
               <div className="graph-hover-actions">
+                <button
+                  className="ghost"
+                  onClick={() => setGraphSourceOpen((prev) => !prev)}
+                  disabled={!graphSourceOptions.length}
+                >
+                  {graphSourceOpen ? "Hide source" : "Show source"}
+                </button>
                 <button className="ghost" onClick={() => setSelectedKey(null)}>
                   Close
                 </button>
@@ -1107,6 +1218,26 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
             Type: {hoveredNode?.kind || "unknown"}
             {hoveredNode?.root ? ` · Root: ${hoveredNode.root}` : ""}
           </div>
+          {graphSourceOpen ? (
+            <div className="graph-source">
+              <div className="graph-source-head">
+                <div className="muted">Source</div>
+                <select
+                  value={graphSourceKey}
+                  onChange={(e) => setGraphSourceKey(e.target.value)}
+                >
+                  {graphSourceOptions.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <pre className="code">
+                {graphSourcePayload ? JSON.stringify(graphSourcePayload, null, 2) : ""}
+              </pre>
+            </div>
+          ) : null}
           {hoveredNode && (hoveredNode.kind === "hub" || hoveredNode.kind === "root") ? (
             <div className="spoke-list">
               <div className="muted">
@@ -1423,11 +1554,11 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                       </div>
                       <div className="graph-record-row">
                         <span>Valid from</span>
-                        <span>{tls.cert?.not_before ? formatDate(tls.cert.not_before) : "-"}</span>
+                        <span>{certNotBefore ? formatDate(certNotBefore) : "-"}</span>
                       </div>
                       <div className="graph-record-row">
                         <span>Valid until</span>
-                        <span>{tls.cert?.not_after ? formatDate(tls.cert.not_after) : "-"}</span>
+                        <span>{certNotAfter ? formatDate(certNotAfter) : "-"}</span>
                       </div>
                       <div className="graph-record-row">
                         <span>Issuer</span>
@@ -1649,7 +1780,7 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
 }
 
 export default function App() {
-  const [companies, setCompanies] = useState([]);
+  const [allCompanies, setAllCompanies] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(ADD_CUSTOMER_OPTION);
   const [activeCompany, setActiveCompany] = useState(null);
   const [scans, setScans] = useState([]);
@@ -1657,9 +1788,10 @@ export default function App() {
   const [artifacts, setArtifacts] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [theme, setTheme] = useState("light");
+  const [theme, setTheme] = useState(() => getThemeForUser(""));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
+  const [userModalOpen, setUserModalOpen] = useState(false);
   const [maxLabelCap, setMaxLabelCap] = useState(36);
 
   const [newCustomerName, setNewCustomerName] = useState("");
@@ -1686,7 +1818,58 @@ export default function App() {
   });
   const customerCardRef = useRef(null);
   const scansCardRef = useRef(null);
+  const [users, setUsers] = useState(() => readStoredJson(USER_STORAGE_KEY, []));
+  const [groups, setGroups] = useState(() => {
+    const stored = readStoredJson(GROUP_STORAGE_KEY, []);
+    return stored.length ? stored : ["default"];
+  });
+  const [companyGroups, setCompanyGroups] = useState(() =>
+    readStoredJson(COMPANY_GROUP_KEY, {})
+  );
+  const [activeUserId, setActiveUserId] = useState(
+    () => window.localStorage.getItem(ACTIVE_USER_KEY) || ""
+  );
+  const [userError, setUserError] = useState("");
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserRole, setNewUserRole] = useState("standard");
+  const [newUserGroupId, setNewUserGroupId] = useState("");
+  const [newUserGroupChoice, setNewUserGroupChoice] = useState(
+    groups[0] || NEW_GROUP_OPTION
+  );
+  const [switchUserId, setSwitchUserId] = useState("");
+  const [editingUserId, setEditingUserId] = useState("");
+  const [editUserName, setEditUserName] = useState("");
+  const [editUserEmail, setEditUserEmail] = useState("");
+  const [editUserGroupId, setEditUserGroupId] = useState("");
+  const [userModalRect, setUserModalRect] = useState(() => {
+    const width = 760;
+    const height = 520;
+    if (typeof window !== "undefined") {
+      const x = Math.max(24, Math.round((window.innerWidth - width) / 2));
+      const y = Math.max(24, Math.round((window.innerHeight - height) / 2));
+      return { x, y, width, height };
+    }
+    return { x: 80, y: 80, width, height };
+  });
+  const [userModalDragging, setUserModalDragging] = useState(false);
+  const [userModalResizing, setUserModalResizing] = useState(false);
+  const userModalDragRef = useRef({ x: 0, y: 0 });
+  const userModalResizeRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
 
+  const activeUser = useMemo(
+    () => users.find((u) => u.id === activeUserId) || null,
+    [users, activeUserId]
+  );
+  const isAdmin = activeUser?.role === "admin";
+  const companies = useMemo(() => {
+    if (!activeUser || activeUser.role === "admin") {
+      return allCompanies;
+    }
+    return allCompanies.filter(
+      (company) => companyGroups[company.slug] === activeUser.groupId
+    );
+  }, [allCompanies, activeUser, companyGroups]);
   const activeScan = useMemo(
     () => scans.find((s) => s.id === selectedScanId),
     [scans, selectedScanId]
@@ -1704,21 +1887,47 @@ export default function App() {
     [runningScan, activeScan]
   );
   const scanBlocked = scanInFlight || hasRunningScan;
+  const whoisRoots = artifacts?.whois?.roots || [];
+  const [showSource, setShowSource] = useState(false);
+  const [sourceKey, setSourceKey] = useState("");
+  const artifactKeys = useMemo(() => {
+    if (!artifacts) return [];
+    return Object.keys(artifacts).sort();
+  }, [artifacts]);
 
   async function loadCompanies() {
     const data = await api.listCompanies();
-    setCompanies(data);
+    setAllCompanies(data);
 
-    if (
-      selectedCustomer !== ADD_CUSTOMER_OPTION &&
-      !data.some((c) => c.slug === selectedCustomer)
-    ) {
-      setSelectedCustomer(ADD_CUSTOMER_OPTION);
-      setActiveCompany(null);
-      setScans([]);
-      setSelectedScanId(null);
-      setArtifacts(null);
-    }
+    setCompanyGroups((current) => {
+      let next = { ...current };
+      let changed = false;
+      let nextGroups = groups.slice();
+      const fallbackGroup = nextGroups[0] || "default";
+      if (!nextGroups.length) {
+        nextGroups = ["default"];
+        changed = true;
+      }
+      for (const company of data) {
+        if (!next[company.slug]) {
+          const assigned = fallbackGroup;
+          next[company.slug] = assigned;
+          if (assigned && !nextGroups.includes(assigned)) {
+            nextGroups.push(assigned);
+          }
+          changed = true;
+        }
+      }
+      if (changed) {
+        if (nextGroups.length && nextGroups.join("|") !== groups.join("|")) {
+          setGroups(nextGroups);
+          writeStoredJson(GROUP_STORAGE_KEY, nextGroups);
+        }
+        writeStoredJson(COMPANY_GROUP_KEY, next);
+        return next;
+      }
+      return current;
+    });
   }
 
   async function loadCompany(slug) {
@@ -1798,10 +2007,281 @@ export default function App() {
     }
   }
 
+  function setStoredUsers(next) {
+    setUsers(next);
+    writeStoredJson(USER_STORAGE_KEY, next);
+  }
+
+  function setStoredGroups(next) {
+    const normalized = next.length ? next : ["default"];
+    setGroups(normalized);
+    writeStoredJson(GROUP_STORAGE_KEY, normalized);
+  }
+
+  function setStoredCompanyGroups(next) {
+    setCompanyGroups(next);
+    writeStoredJson(COMPANY_GROUP_KEY, next);
+  }
+
+  function setStoredActiveUser(nextId) {
+    setActiveUserId(nextId);
+    if (nextId) {
+      window.localStorage.setItem(ACTIVE_USER_KEY, nextId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_USER_KEY);
+    }
+  }
+
+  function resetUserForm() {
+    setNewUserName("");
+    setNewUserEmail("");
+    setNewUserRole("standard");
+    setNewUserGroupChoice(groups[0] || NEW_GROUP_OPTION);
+    setNewUserGroupId("");
+  }
+
+  function startEditUser(user) {
+    setEditingUserId(user.id);
+    setEditUserName(user.username);
+    setEditUserEmail(user.email);
+    setEditUserGroupId(user.groupId || "");
+  }
+
+  function startUserModalDrag(e) {
+    if (e.button !== 0) return;
+    userModalDragRef.current = {
+      x: e.clientX - userModalRect.x,
+      y: e.clientY - userModalRect.y,
+    };
+    setUserModalDragging(true);
+  }
+
+  function startUserModalResize(e) {
+    if (e.button !== 0) return;
+    userModalResizeRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      width: userModalRect.width,
+      height: userModalRect.height,
+    };
+    setUserModalResizing(true);
+  }
+
+  function handleCreateUser() {
+    setUserError("");
+    const username = newUserName.trim();
+    const email = newUserEmail.trim();
+    const role = newUserRole === "admin" ? "admin" : "standard";
+    const normalized = username.toLowerCase();
+    if (!username) {
+      setUserError("Username is required.");
+      return;
+    }
+    if (users.some((u) => u.username.toLowerCase() === normalized)) {
+      setUserError("Username already exists.");
+      return;
+    }
+    if (!email) {
+      setUserError("Email is required.");
+      return;
+    }
+    let groupId =
+      newUserGroupChoice === NEW_GROUP_OPTION
+        ? newUserGroupId.trim()
+        : newUserGroupChoice;
+    if (role === "standard" && !groupId) {
+      setUserError("Standard users must have a group ID.");
+      return;
+    }
+    let nextGroups = groups.slice();
+    if (groupId && !nextGroups.includes(groupId)) {
+      nextGroups.push(groupId);
+    }
+    if (!nextGroups.length) {
+      nextGroups = ["default"];
+      if (role === "standard" && !groupId) {
+        groupId = "default";
+      }
+    }
+    const user = {
+      id: makeId("user"),
+      username,
+      email,
+      role,
+      groupId: role === "standard" ? groupId : "",
+      createdAt: new Date().toISOString(),
+    };
+    setStoredUsers([...users, user]);
+    setStoredGroups(nextGroups);
+    if (!activeUserId) {
+      setStoredActiveUser(user.id);
+    }
+    setSwitchUserId(user.id);
+    resetUserForm();
+  }
+
+  function handleSwitchUser() {
+    if (!switchUserId) return;
+    setStoredActiveUser(switchUserId);
+  }
+
+  function handleRemoveUser(userId) {
+    const target = users.find((u) => u.id === userId);
+    if (!target) return;
+    if (!confirm(`Remove user ${target.username}?`)) return;
+    const next = users.filter((u) => u.id !== userId);
+    setStoredUsers(next);
+    if (activeUserId === userId) {
+      setStoredActiveUser("");
+    }
+    if (editingUserId === userId) {
+      setEditingUserId("");
+    }
+  }
+
+  function handleUpdateUser() {
+    if (!editingUserId) return;
+    const username = editUserName.trim();
+    const email = editUserEmail.trim();
+    if (!username) {
+      setUserError("Username is required.");
+      return;
+    }
+    if (!email) {
+      setUserError("Email is required.");
+      return;
+    }
+    if (!editUserGroupId.trim()) {
+      setUserError("Group ID is required.");
+      return;
+    }
+    const normalized = username.toLowerCase();
+    if (
+      users.some(
+        (u) => u.id !== editingUserId && u.username.toLowerCase() === normalized
+      )
+    ) {
+      setUserError("Username already exists.");
+      return;
+    }
+    const nextUsers = users.map((u) => {
+      if (u.id !== editingUserId) return u;
+      return {
+        ...u,
+        username,
+        email,
+        groupId: u.role === "standard" ? editUserGroupId.trim() : u.groupId,
+      };
+    });
+    setStoredUsers(nextUsers);
+    setEditingUserId("");
+  }
+
+  function handleRemoveGroup(groupId) {
+    if (!groupId) return;
+    if (!confirm(`Remove group ${groupId}?`)) return;
+    const nextGroups = groups.filter((g) => g !== groupId);
+    const fallback = nextGroups[0] || "default";
+    const nextUsers = users.map((u) => {
+      if (u.role === "standard" && u.groupId === groupId) {
+        return { ...u, groupId: fallback };
+      }
+      return u;
+    });
+    const nextCompanyGroups = { ...companyGroups };
+    Object.keys(nextCompanyGroups).forEach((slug) => {
+      if (nextCompanyGroups[slug] === groupId) {
+        nextCompanyGroups[slug] = fallback;
+      }
+    });
+    setStoredGroups(nextGroups.length ? nextGroups : [fallback]);
+    setStoredUsers(nextUsers);
+    setStoredCompanyGroups(nextCompanyGroups);
+  }
+
+  function handleCompanyGroupChange(slug, nextGroupId) {
+    if (!slug || !nextGroupId) return;
+    const next = { ...companyGroups, [slug]: nextGroupId };
+    setStoredCompanyGroups(next);
+  }
+
+  function exportArtifactsJson() {
+    if (!artifacts) return;
+    const payload = JSON.stringify(artifacts, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const slug = activeCompany?.slug || "company";
+    const scanNumber = activeScan?.company_scan_number ?? "scan";
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `asm-artifacts-${slug}-${scanNumber}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
 
   useEffect(() => {
     runWithStatus(loadCompanies);
   }, []);
+
+  useEffect(() => {
+    if (!groups.length) {
+      setStoredGroups(["default"]);
+    }
+  }, [groups]);
+
+  useEffect(() => {
+    if (!newUserGroupChoice) {
+      setNewUserGroupChoice(groups[0] || NEW_GROUP_OPTION);
+      return;
+    }
+    if (
+      newUserGroupChoice !== NEW_GROUP_OPTION &&
+      !groups.includes(newUserGroupChoice)
+    ) {
+      setNewUserGroupChoice(groups[0] || NEW_GROUP_OPTION);
+    }
+  }, [groups, newUserGroupChoice]);
+
+  useEffect(() => {
+    if (
+      selectedCustomer !== ADD_CUSTOMER_OPTION &&
+      !companies.some((c) => c.slug === selectedCustomer)
+    ) {
+      setSelectedCustomer(ADD_CUSTOMER_OPTION);
+      setActiveCompany(null);
+      setScans([]);
+      setSelectedScanId(null);
+      setArtifacts(null);
+    }
+  }, [companies, selectedCustomer]);
+
+  useEffect(() => {
+    if (!userModalOpen) return;
+    setSwitchUserId(activeUserId || "");
+    setUserError("");
+    setEditingUserId("");
+  }, [userModalOpen, activeUserId]);
+
+  useEffect(() => {
+    if (!artifacts) {
+      setShowSource(false);
+      setSourceKey("");
+      return;
+    }
+    if (!sourceKey) {
+      setSourceKey(
+        artifacts.whois ? "whois" : artifactKeys[0] || ""
+      );
+    }
+  }, [artifacts, artifactKeys, sourceKey]);
+
+  useEffect(() => {
+    const nextTheme = getThemeForUser(activeUserId || "");
+    setTheme(nextTheme);
+  }, [activeUserId]);
 
   useEffect(() => {
     if (selectedCustomer === ADD_CUSTOMER_OPTION) {
@@ -1811,6 +2291,39 @@ export default function App() {
     }
     runWithStatus(() => loadCompany(selectedCustomer));
   }, [selectedCustomer]);
+
+  useEffect(() => {
+    if (!userModalDragging && !userModalResizing) return;
+    const onMove = (e) => {
+      if (userModalDragging) {
+        setUserModalRect((prev) => {
+          const nextX = Math.max(12, e.clientX - userModalDragRef.current.x);
+          const nextY = Math.max(12, e.clientY - userModalDragRef.current.y);
+          return { ...prev, x: nextX, y: nextY };
+        });
+      } else if (userModalResizing) {
+        const minWidth = 520;
+        const minHeight = 360;
+        const dx = e.clientX - userModalResizeRef.current.x;
+        const dy = e.clientY - userModalResizeRef.current.y;
+        setUserModalRect((prev) => ({
+          ...prev,
+          width: Math.max(minWidth, userModalResizeRef.current.width + dx),
+          height: Math.max(minHeight, userModalResizeRef.current.height + dy),
+        }));
+      }
+    };
+    const onUp = () => {
+      setUserModalDragging(false);
+      setUserModalResizing(false);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [userModalDragging, userModalResizing]);
 
   useEffect(() => {
     const slug = activeCompany?.slug;
@@ -1897,6 +2410,7 @@ export default function App() {
                 />
               </label>
               <button
+                className="header-action"
                 onClick={() =>
                   runWithStatus(async () => {
                     const name = newCustomerName.trim();
@@ -1905,7 +2419,7 @@ export default function App() {
                     if (!domain) throw new Error("Domain is required");
                     const customer = deriveCustomerFromDomain(domain);
                     const existingSlugs = new Set(
-                      companies.map((c) => (c.slug || "").toLowerCase())
+                      allCompanies.map((c) => (c.slug || "").toLowerCase())
                     );
                     const uniqueSlug = ensureUniqueSlug(
                       customer.slugBase,
@@ -1916,6 +2430,17 @@ export default function App() {
                       name,
                       domains: [domain],
                     });
+                    const assignedGroup =
+                      activeUser?.role === "standard" && activeUser.groupId
+                        ? activeUser.groupId
+                        : groups[0] || "default";
+                    setStoredCompanyGroups({
+                      ...companyGroups,
+                      [created.slug]: assignedGroup,
+                    });
+                    if (assignedGroup && !groups.includes(assignedGroup)) {
+                      setStoredGroups([...groups, assignedGroup]);
+                    }
                     setNewCustomerName("");
                     setNewCustomerDomain("");
                     await loadCompanies();
@@ -1927,18 +2452,49 @@ export default function App() {
               </button>
             </div>
           ) : null}
-          <button className="ghost" onClick={() => runWithStatus(loadCompanies)}>
+          <button
+            className="ghost header-action"
+            onClick={() => runWithStatus(loadCompanies)}
+          >
             Refresh
           </button>
         </div>
         <div className="status">
-          <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
-            ⚙
-          </button>
-          <span
-            className={`dot ${loading ? "pulse" : ""} ${hasRunningScan ? "scan-running" : ""}`.trim()}
-          />
-          {loading ? "Syncing" : "Idle"}
+          <div className="status-line">
+            <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+              ⚙
+            </button>
+            <span
+              className={`dot ${loading ? "pulse" : ""} ${hasRunningScan ? "scan-running" : ""}`.trim()}
+            />
+            {loading ? "Syncing" : "Idle"}
+          </div>
+          <div className="status-user">
+            {activeUser ? (
+              <>
+                <button
+                  className="ghost user-chip"
+                  onClick={() => setUserModalOpen(true)}
+                  type="button"
+                >
+                  User: {activeUser.username}
+                </button>
+                <div className="muted user-meta">
+                  {activeUser.role === "admin"
+                    ? "Admin user"
+                    : `Group ${activeUser.groupId || "-"}`}
+                </div>
+              </>
+            ) : (
+              <button
+                className="ghost user-chip"
+                onClick={() => setUserModalOpen(true)}
+                type="button"
+              >
+                User: Login
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -2244,16 +2800,110 @@ export default function App() {
                               </div>
                             ) : null}
                           </div>
-                          <button
-                            className="ghost"
-                            onClick={() => {
-                              setSelectedScanId(null);
-                              setArtifacts(null);
-                            }}
-                          >
-                            Close
-                          </button>
+                          <div className="artifact-actions">
+                            <button
+                              className="ghost"
+                              onClick={() => setShowSource((prev) => !prev)}
+                              disabled={!artifactKeys.length}
+                            >
+                              {showSource ? "Hide source" : "Show source"}
+                            </button>
+                            <button
+                              className="ghost"
+                              onClick={() => {
+                                setSelectedScanId(null);
+                                setArtifacts(null);
+                              }}
+                            >
+                              Close
+                            </button>
+                          </div>
                         </div>
+                        {showSource ? (
+                          <div className="artifact-source">
+                            <div className="artifact-source-head">
+                              <div className="muted">Artifact source</div>
+                              <select
+                                value={sourceKey}
+                                onChange={(e) => setSourceKey(e.target.value)}
+                              >
+                                {artifactKeys.map((key) => (
+                                  <option key={key} value={key}>
+                                    {key}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <pre className="code">
+                              {sourceKey ? JSON.stringify(artifacts[sourceKey], null, 2) : ""}
+                            </pre>
+                          </div>
+                        ) : null}
+                        {whoisRoots.length ? (
+                          <details className="graph-details" open>
+                            <summary>WHOIS (roots)</summary>
+                            <div className="whois-list">
+                              {whoisRoots.map((entry) => (
+                                <div key={entry.domain} className="whois-entry">
+                                  <div className="whois-title">{entry.domain}</div>
+                                  {entry.error ? (
+                                    <div className="muted">Error: {entry.error}</div>
+                                  ) : (
+                                    <>
+                                      <div className="graph-records">
+                                        <div className="graph-record-row">
+                                          <span>Registrar</span>
+                                          <span>{entry.registrar || "-"}</span>
+                                        </div>
+                                        <div className="graph-record-row">
+                                          <span>Status</span>
+                                          <span>
+                                            {(entry.status || []).length
+                                              ? entry.status.join(", ")
+                                              : "-"}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      {(entry.events || []).length ? (
+                                        <div className="whois-events">
+                                          <div className="muted">Events</div>
+                                          <div className="graph-records">
+                                            {entry.events.map((ev, idx) => (
+                                              <div
+                                                key={`${entry.domain}-ev-${idx}`}
+                                                className="graph-record-row"
+                                              >
+                                                <span>{ev.action || "Event"}</span>
+                                                <span>
+                                                  {ev.date ? formatDate(ev.date) : "-"}
+                                                </span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      ) : null}
+                                      {(entry.nameservers || []).length ? (
+                                        <div className="whois-nameservers">
+                                          <div className="muted">Nameservers</div>
+                                          <div className="graph-chip-list">
+                                            {entry.nameservers.map((ns) => (
+                                              <span
+                                                key={`${entry.domain}-ns-${ns}`}
+                                                className="graph-chip"
+                                              >
+                                                {ns}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      ) : null}
+                                    </>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        ) : null}
                         <DomainRelationshipGraph
                           artifacts={artifacts}
                           maxLabelCap={maxLabelCap}
@@ -2299,6 +2949,9 @@ export default function App() {
                         ) : null}
                         <details>
                           <summary className="muted">Raw JSON artifacts</summary>
+                          <button className="ghost export-btn" onClick={exportArtifactsJson}>
+                            Export
+                          </button>
                           <pre className="code">
                             {JSON.stringify(artifacts, null, 2)}
                           </pre>
@@ -2326,16 +2979,28 @@ export default function App() {
               </button>
             </div>
             <div className="settings-row">
-              <label>
-                Theme
-                <select
-                  value={theme}
-                  onChange={(e) => setTheme(e.target.value)}
-                >
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
-                </select>
-              </label>
+              <div className="settings-toggle">
+                <div>
+                  <div className="settings-label">Theme</div>
+                  <div className="muted">
+                    {theme === "dark" ? "Dark mode" : "Light mode"}
+                  </div>
+                </div>
+                <label className="toggle">
+                  <input
+                    type="checkbox"
+                    checked={theme === "dark"}
+                    onChange={(e) => {
+                      const nextTheme = e.target.checked ? "dark" : "light";
+                      setTheme(nextTheme);
+                      setThemeForUser(activeUserId || "", nextTheme);
+                    }}
+                  />
+                  <span className="toggle-track">
+                    <span className="toggle-thumb" />
+                  </span>
+                </label>
+              </div>
             </div>
             <div className="settings-row">
               <label>
@@ -2350,6 +3015,252 @@ export default function App() {
                 />
               </label>
             </div>
+            {isAdmin ? (
+              <div className="settings-row">
+                <div className="panel-header">
+                  <h3>Manage companies</h3>
+                </div>
+                <div className="settings-company-list">
+                  {allCompanies.length ? (
+                    allCompanies.map((company) => (
+                      <div key={company.slug} className="settings-company-row">
+                        <div>
+                          <div className="settings-company-name">{company.name}</div>
+                          <div className="muted">{company.slug}</div>
+                        </div>
+                        <label className="settings-company-group">
+                          Group ID
+                          <select
+                            value={companyGroups[company.slug] || groups[0] || ""}
+                            onChange={(e) =>
+                              handleCompanyGroupChange(company.slug, e.target.value)
+                            }
+                          >
+                            {groups.map((groupId) => (
+                              <option key={groupId} value={groupId}>
+                                {groupId}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="muted">No companies available.</div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {userModalOpen ? (
+        <div className="modal-backdrop" onClick={() => setUserModalOpen(false)}>
+          <div
+            className="user-modal-panel"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              left: userModalRect.x,
+              top: userModalRect.y,
+              width: userModalRect.width,
+              height: userModalRect.height,
+            }}
+          >
+            <div className="panel-header user-modal-header" onMouseDown={startUserModalDrag}>
+              <div>
+                <h2>User Access</h2>
+                <div className="muted">
+                  Switch users, create new profiles, and manage groups.
+                </div>
+              </div>
+              <button className="ghost" onClick={() => setUserModalOpen(false)}>
+                Close
+              </button>
+            </div>
+            {userError ? <div className="user-error">{userError}</div> : null}
+            <div className="user-modal-grid">
+              <section className="panel">
+                <h3>Switch user</h3>
+                <div className="row">
+                  <select
+                    value={switchUserId}
+                    onChange={(e) => setSwitchUserId(e.target.value)}
+                  >
+                    <option value="">Select user</option>
+                    {users.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.username} · {user.role}
+                      </option>
+                    ))}
+                  </select>
+                  <button disabled={!switchUserId} onClick={handleSwitchUser}>
+                    Set active
+                  </button>
+                </div>
+                <div className="muted">
+                  Active: {activeUser ? activeUser.username : "None"}
+                </div>
+                <button className="ghost" onClick={() => setStoredActiveUser("")}>
+                  Logout
+                </button>
+              </section>
+
+              <section className="panel">
+                <h3>Create user</h3>
+                <label>
+                  Username
+                  <input
+                    value={newUserName}
+                    onChange={(e) => setNewUserName(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Email
+                  <input
+                    value={newUserEmail}
+                    onChange={(e) => setNewUserEmail(e.target.value)}
+                  />
+                </label>
+                <label>
+                  User type
+                  <select
+                    value={newUserRole}
+                    onChange={(e) => setNewUserRole(e.target.value)}
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="standard">Standard</option>
+                  </select>
+                </label>
+                <label>
+                  Group ID
+                  <select
+                    value={newUserGroupChoice}
+                    onChange={(e) => setNewUserGroupChoice(e.target.value)}
+                    disabled={newUserRole === "admin"}
+                  >
+                    {groups.map((groupId) => (
+                      <option key={groupId} value={groupId}>
+                        {groupId}
+                      </option>
+                    ))}
+                    <option value={NEW_GROUP_OPTION}>Create new group</option>
+                  </select>
+                </label>
+                {newUserGroupChoice === NEW_GROUP_OPTION ? (
+                  <label>
+                    New group ID
+                    <input
+                      value={newUserGroupId}
+                      onChange={(e) => setNewUserGroupId(e.target.value)}
+                    />
+                  </label>
+                ) : null}
+                <button onClick={handleCreateUser}>Create user</button>
+              </section>
+            </div>
+
+            {isAdmin ? (
+              <div className="user-admin-grid">
+                <section className="panel">
+                  <h3>User directory</h3>
+                  <div className="user-list">
+                    {users.length ? (
+                      users.map((user) => (
+                        <div key={user.id} className="user-row">
+                          <div>
+                            <div className="user-name">{user.username}</div>
+                            <div className="muted">
+                              {user.email} · {user.role}
+                              {user.role === "standard"
+                                ? ` · Group ${user.groupId || "-"}`
+                                : ""}
+                            </div>
+                          </div>
+                          <div className="row">
+                            {user.role === "standard" ? (
+                              <button
+                                className="ghost"
+                                onClick={() => startEditUser(user)}
+                              >
+                                Edit
+                              </button>
+                            ) : null}
+                            <button
+                              className="danger ghost"
+                              onClick={() => handleRemoveUser(user.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="muted">No users yet.</div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <h3>Groups</h3>
+                  <div className="group-list">
+                    {groups.map((groupId) => (
+                      <div key={groupId} className="group-row">
+                        <span>{groupId}</span>
+                        <button
+                          className="danger ghost"
+                          onClick={() => handleRemoveGroup(groupId)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            ) : null}
+
+            {isAdmin && editingUserId ? (
+              <div className="panel">
+                <div className="panel-header">
+                  <h3>Edit standard user</h3>
+                  <button className="ghost" onClick={() => setEditingUserId("")}>
+                    Cancel
+                  </button>
+                </div>
+                <label>
+                  Username
+                  <input
+                    value={editUserName}
+                    onChange={(e) => setEditUserName(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Email
+                  <input
+                    value={editUserEmail}
+                    onChange={(e) => setEditUserEmail(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Group ID
+                  <select
+                    value={editUserGroupId}
+                    onChange={(e) => setEditUserGroupId(e.target.value)}
+                  >
+                    {groups.map((groupId) => (
+                      <option key={groupId} value={groupId}>
+                        {groupId}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button onClick={handleUpdateUser}>Save changes</button>
+              </div>
+            ) : null}
+            <div
+              className="user-modal-resize"
+              onMouseDown={startUserModalResize}
+            />
           </div>
         </div>
       ) : null}
@@ -2434,6 +3345,29 @@ export default function App() {
                   Add domain
                 </button>
               </details>
+              {isAdmin ? (
+                <details className="panel mini" open>
+                  <summary>Group assignment</summary>
+                  <label>
+                    Group ID
+                    <select
+                      value={companyGroups[activeCompany.slug] || groups[0] || ""}
+                      onChange={(e) =>
+                        handleCompanyGroupChange(activeCompany.slug, e.target.value)
+                      }
+                    >
+                      {groups.map((groupId) => (
+                        <option key={groupId} value={groupId}>
+                          {groupId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="muted">
+                    Standard users only see companies in their assigned group.
+                  </div>
+                </details>
+              ) : null}
             </div>
           </div>
         </div>
