@@ -141,5 +141,4 @@ def delete_company_scan(slug: str, scan_id: int) -> None:
     scan_service.delete_company_scan(slug, scan_id)
 
 
-app.include_router(router)
 app.include_router(router, prefix="/v1")

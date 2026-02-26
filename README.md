@@ -21,7 +21,7 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 
 - Canonical backend implementation lives in `asm_notebook/`.
 - Root-level files (`api_main.py`, `models.py`, `db.py`, `init_db.py`, `cli.py`) are compatibility shims that re-export from `asm_notebook/*`.
-- API routing/validation lives in `asm_notebook/api_main.py`.
+- API routing/validation lives in `asm_notebook/api_main.py` under `/v1`.
 - Service-layer logic lives in `asm_notebook/services/` (`scan_service.py`, `company_service.py`).
 
 ## Core Principles
@@ -163,9 +163,9 @@ Open:
 
 Notes:
 
-- The frontend uses a Vite proxy to the backend for API routes (`/v1`, `/companies`, `/health` in `vite.config.js`).
+- The frontend uses a Vite proxy to the backend for API routes (`/v1` in `vite.config.js`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
-- API versioning: `/v1/*` routes are available; legacy unversioned routes still work.
+- API versioning: `/v1/*` routes are available; unversioned routes are not exposed.
 - Frontend can override the prefix with `VITE_API_PREFIX` (default `/v1`).
 
 ## Frontend UX
@@ -248,29 +248,29 @@ Health:
 
 Companies:
 
-- `POST /companies`
-- `GET /companies`
-- `GET /companies/{slug}`
-- `PUT /companies/{slug}/domains`
-- `PATCH /companies/{slug}`
-- `DELETE /companies/{slug}`
+- `POST /v1/companies`
+- `GET /v1/companies`
+- `GET /v1/companies/{slug}`
+- `PUT /v1/companies/{slug}/domains`
+- `PATCH /v1/companies/{slug}`
+- `DELETE /v1/companies/{slug}`
 
 Scans (company-scoped and hardened):
 
-- `POST /companies/{slug}/scans`
-- `GET /companies/{slug}/scans`
-- `GET /companies/{slug}/scans/latest`
-- `GET /companies/{slug}/scans/{scan_id}`
-- `GET /companies/{slug}/scans/{scan_id}/artifacts`
-- `GET /companies/{slug}/scans/by-number/{company_scan_number}`
-- `DELETE /companies/{slug}/scans/{scan_id}`
+- `POST /v1/companies/{slug}/scans`
+- `GET /v1/companies/{slug}/scans`
+- `GET /v1/companies/{slug}/scans/latest`
+- `GET /v1/companies/{slug}/scans/{scan_id}`
+- `GET /v1/companies/{slug}/scans/{scan_id}/artifacts`
+- `GET /v1/companies/{slug}/scans/by-number/{company_scan_number}`
+- `DELETE /v1/companies/{slug}/scans/{scan_id}`
 
 ### API Examples
 
 Create a company:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/companies" -ContentType "application/json" -Body '{
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/companies" -ContentType "application/json" -Body '{
   "slug": "example",
   "name": "Example Company",
   "domains": ["example.com"]
@@ -280,7 +280,7 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/companies" -ContentTy
 Trigger a scan:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/companies/example/scans"
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/companies/example/scans"
 ```
 
 The scan trigger returns immediately with a running scan record, for example:
@@ -297,24 +297,24 @@ The scan trigger returns immediately with a running scan record, for example:
 List scans:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans" | ConvertTo-Json -Depth 5
 ```
 
 Fetch artifacts:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/1/artifacts" | ConvertTo-Json -Depth 8
+Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/1/artifacts" | ConvertTo-Json -Depth 8
 ```
 
 Fetch by per-company scan number:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/companies/example/scans/by-number/1"
+Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/by-number/1"
 ```
 
 ## Scan Execution Flow
 
-1. `POST /companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
+1. `POST /v1/companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
 2. Background worker collects subdomains via Certificate Transparency (`crt.sh`).
 3. Scope-filter against root domains.
 4. Perform passive DNS resolution (A/AAAA/CNAME/MX/NS + TXT/CAA/NS/SOA as needed).
@@ -400,7 +400,7 @@ poetry run python -m pytest -q
 
 ## Known Gaps
 
-- No service layer yet (scan logic is in the API/CLI).
+- Service layer lives under `asm_notebook/services/`.
 - No external job queue yet (uses FastAPI background tasks; RQ/Celery would be better for concurrency/retries).
 
 ## Safety / Scope
