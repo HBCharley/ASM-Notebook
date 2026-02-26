@@ -33,6 +33,14 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Structured JSON artifacts
 - Hardened company-scoped access
 
+## CVE Data
+
+- CVE enrichment uses NVD JSON feeds (last 2 years by default) cached under `asm_notebook/data/nvd/`.
+- Configure with environment variables:
+- `ASM_NVD_YEARS` (default `2`)
+- `ASM_NVD_REFRESH=1` to force re-download
+- `ASM_NVD_DISABLE=1` to skip CVE lookups
+
 ## Data Model
 
 - `Company`

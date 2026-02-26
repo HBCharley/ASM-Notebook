@@ -19,6 +19,7 @@ from ..plugins.dns import resolve_dns, resolve_ips
 from ..plugins.http_meta import fetch_http_metadata
 from ..plugins.ip_intel import lookup_asn_for_ips
 from .company_service import normalize_domain
+from .cve_service import find_cves
 
 
 def _now_utc() -> datetime:
@@ -270,16 +271,8 @@ def _compute_exposure_score(row: dict[str, Any]) -> tuple[int, list[str]]:
     return score, factors
 
 
-def _cve_findings(reported_versions: list[dict[str, str]]) -> list[dict[str, str]]:
-    findings = []
-    for entry in reported_versions or []:
-        name = entry.get("name", "")
-        version = entry.get("version", "")
-        if not name or not version:
-            continue
-        if name.lower() == "apache" and version.startswith("2.4"):
-            findings.append({"cve": "CVE-2021-41773", "source": "apache"})
-    return findings
+def _cve_findings(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
+    return find_cves(reported_versions or [])
 
 
 def _flatten_cert_entity(entity: Any) -> str:
