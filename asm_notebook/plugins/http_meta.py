@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import socket
 import ssl
@@ -11,7 +12,6 @@ from typing import Any, Dict
 
 import httpx
 from cryptography import x509
-
 
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _GENERATOR_RE = re.compile(
@@ -84,11 +84,11 @@ def _mmh3_32(data: bytes, seed: int = 0) -> int:
         h1 ^= k1
 
     h1 ^= length
-    h1 ^= (h1 >> 16)
+    h1 ^= h1 >> 16
     h1 = (h1 * 0x85EBCA6B) & 0xFFFFFFFF
-    h1 ^= (h1 >> 13)
+    h1 ^= h1 >> 13
     h1 = (h1 * 0xC2B2AE35) & 0xFFFFFFFF
-    h1 ^= (h1 >> 16)
+    h1 ^= h1 >> 16
 
     return struct.unpack("<i", struct.pack("<I", h1))[0]
 
@@ -132,7 +132,9 @@ def _fingerprint_html(body: str, headers: dict[str, str]) -> list[str]:
     return sorted(fingerprints)
 
 
-def _extract_reported_versions(headers: dict[str, str], body: str) -> list[dict[str, str]]:
+def _extract_reported_versions(
+    headers: dict[str, str], body: str
+) -> list[dict[str, str]]:
     versions: list[dict[str, str]] = []
 
     for header_key in ("server", "x-powered-by"):
@@ -201,7 +203,9 @@ def _detect_technologies(body: str, headers: dict[str, str]) -> list[dict[str, s
 
     powered = headers.get("x-powered-by", "")
     for m in _VERSION_RE.finditer(powered):
-        findings.append({"name": m.group("name").lower(), "source": "header:x-powered-by"})
+        findings.append(
+            {"name": m.group("name").lower(), "source": "header:x-powered-by"}
+        )
 
     server = headers.get("server", "")
     for m in _VERSION_RE.finditer(server):
@@ -209,7 +213,9 @@ def _detect_technologies(body: str, headers: dict[str, str]) -> list[dict[str, s
 
     gen = _GENERATOR_RE.search(body)
     if gen:
-        findings.append({"name": gen.group(1).strip().lower(), "source": "meta:generator"})
+        findings.append(
+            {"name": gen.group(1).strip().lower(), "source": "meta:generator"}
+        )
 
     seen: set[tuple[str, str]] = set()
     unique: list[dict[str, str]] = []
@@ -223,7 +229,9 @@ def _detect_technologies(body: str, headers: dict[str, str]) -> list[dict[str, s
     return unique
 
 
-def _detect_cloud_storage(body: str, url: httpx.URL, headers: dict[str, str]) -> dict[str, Any]:
+def _detect_cloud_storage(
+    body: str, url: httpx.URL, headers: dict[str, str]
+) -> dict[str, Any]:
     host = (url.host or "").lower()
     provider = ""
     if "s3.amazonaws.com" in host or host.endswith(".s3.amazonaws.com"):
@@ -243,7 +251,10 @@ def _detect_cloud_storage(body: str, url: httpx.URL, headers: dict[str, str]) ->
     lower_body = body.lower()
     listing = "listbucketresult" in lower_body
     error_hint = ""
-    if "nosuchbucket" in lower_body or "the specified bucket does not exist" in lower_body:
+    if (
+        "nosuchbucket" in lower_body
+        or "the specified bucket does not exist" in lower_body
+    ):
         error_hint = "no_such_bucket"
     if "accessdenied" in lower_body:
         error_hint = "access_denied"
@@ -274,7 +285,9 @@ def _parse_hsts(header: str | None) -> dict[str, Any]:
             include_subdomains = True
         if d.lower() == "preload":
             preload = True
-    preload_eligible = bool(max_age and max_age >= 31536000 and include_subdomains and preload)
+    preload_eligible = bool(
+        max_age and max_age >= 31536000 and include_subdomains and preload
+    )
     return {
         "header": header,
         "max_age": max_age,
@@ -421,9 +434,16 @@ def _fetch_tls_info(host: str, port: int = 443) -> dict[str, Any]:
             }
 
 
-async def fetch_http_metadata(domain: str, deep_scan: bool = False) -> Dict[str, Any]:
+async def fetch_http_metadata(
+    domain: str, deep_scan: bool = False, timeout_seconds: float | None = None
+) -> Dict[str, Any]:
     last_error = ""
-    timeout = httpx.Timeout(8.0, connect=5.0)
+    if timeout_seconds is None:
+        try:
+            timeout_seconds = float(os.getenv("ASM_HTTP_TIMEOUT_SECONDS", "5"))
+        except Exception:
+            timeout_seconds = 5.0
+    timeout = httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds))
 
     async with httpx.AsyncClient(
         timeout=timeout,
@@ -471,14 +491,20 @@ async def fetch_http_metadata(domain: str, deep_scan: bool = False) -> Dict[str,
                 if scheme == "https":
                     host = resp.url.host or domain
                     try:
-                        tls_info = await asyncio.to_thread(_fetch_tls_info, host, resp.url.port or 443)
+                        tls_info = await asyncio.to_thread(
+                            _fetch_tls_info, host, resp.url.port or 443
+                        )
                     except Exception:
                         tls_info = {}
                 deep_resources: dict[str, Any] = {"enabled": deep_scan}
                 if deep_scan:
                     base_url = resp.url.copy_with(path="/", query=None, fragment=None)
                     deep_resources["favicon"] = await _fetch_aux_resource(
-                        client, base_url, "/favicon.ico", _FAVICON_FETCH_LIMIT, collect_bytes=True
+                        client,
+                        base_url,
+                        "/favicon.ico",
+                        _FAVICON_FETCH_LIMIT,
+                        collect_bytes=True,
                     )
                     deep_resources["robots"] = await _fetch_aux_resource(
                         client, base_url, "/robots.txt", _AUX_FETCH_LIMIT

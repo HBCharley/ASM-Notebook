@@ -9,6 +9,7 @@ const GROUP_STORAGE_KEY = "asm.groups";
 const ACTIVE_USER_KEY = "asm.user.active";
 const COMPANY_GROUP_KEY = "asm.company.groups";
 const USER_THEME_KEY = "asm.user.theme";
+const USER_TIMEOUT_KEY = "asm.user.timeouts";
 const NEW_GROUP_OPTION = "__new_group__";
 
 function readStoredJson(key, fallback) {
@@ -41,6 +42,23 @@ function setThemeForUser(userId, theme) {
   writeStoredJson(USER_THEME_KEY, next);
 }
 
+function getTimeoutsForUser(userId) {
+  const map = readStoredJson(USER_TIMEOUT_KEY, {});
+  const key = userId || "__guest";
+  const value = map[key] || {};
+  return {
+    http: Number(value.http) || 5,
+    asn: Number(value.asn) || 5,
+  };
+}
+
+function setTimeoutsForUser(userId, timeouts) {
+  const map = readStoredJson(USER_TIMEOUT_KEY, {});
+  const key = userId || "__guest";
+  const next = { ...map, [key]: timeouts };
+  writeStoredJson(USER_TIMEOUT_KEY, next);
+}
+
 function makeId(prefix = "id") {
   if (typeof crypto !== "undefined" && crypto.randomUUID) {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -53,6 +71,18 @@ function formatDate(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleString();
+}
+
+function formatDuration(start, end) {
+  if (!start || !end) return "-";
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  const ms = endDate.getTime() - startDate.getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "-";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function parseScanProgress(scan) {
@@ -1793,6 +1823,12 @@ export default function App() {
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [maxLabelCap, setMaxLabelCap] = useState(36);
+  const [httpTimeoutSeconds, setHttpTimeoutSeconds] = useState(
+    () => getTimeoutsForUser("").http
+  );
+  const [asnTimeoutSeconds, setAsnTimeoutSeconds] = useState(
+    () => getTimeoutsForUser("").asn
+  );
 
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerDomain, setNewCustomerDomain] = useState("");
@@ -1878,6 +1914,7 @@ export default function App() {
     () => scans.some((s) => s.status === "running"),
     [scans]
   );
+  const isActive = loading || hasRunningScan;
   const runningScan = useMemo(
     () => scans.find((s) => s.status === "running") || null,
     [scans]
@@ -1952,7 +1989,11 @@ export default function App() {
     }
     setScanInFlight(true);
     try {
-      const result = await api.runScan(slug, { deep_scan: deepScan });
+      const result = await api.runScan(slug, {
+        deep_scan: deepScan,
+        http_timeout_seconds: httpTimeoutSeconds,
+        asn_timeout_seconds: asnTimeoutSeconds,
+      });
       await loadCompany(slug);
       if (result?.scan_id) {
         setSelectedScanId(result.scan_id);
@@ -2284,6 +2325,12 @@ export default function App() {
   }, [activeUserId]);
 
   useEffect(() => {
+    const timeouts = getTimeoutsForUser(activeUserId || "");
+    setHttpTimeoutSeconds(timeouts.http);
+    setAsnTimeoutSeconds(timeouts.asn);
+  }, [activeUserId]);
+
+  useEffect(() => {
     if (selectedCustomer === ADD_CUSTOMER_OPTION) {
       setActiveCompany(null);
       setScans([]);
@@ -2465,9 +2512,9 @@ export default function App() {
               ⚙
             </button>
             <span
-              className={`dot ${loading ? "pulse" : ""} ${hasRunningScan ? "scan-running" : ""}`.trim()}
+              className={`dot ${isActive ? "active blink" : "idle"}`.trim()}
             />
-            {loading ? "Syncing" : "Idle"}
+            {isActive ? "Activity" : "Idle"}
           </div>
           <div className="status-user">
             {activeUser ? (
@@ -2738,6 +2785,12 @@ export default function App() {
                               </div>
                               <div className="scan-meta">
                                 {scan.status} · completed {formatDate(scan.completed_at)}
+                                {scan.completed_at
+                                  ? ` · duration ${formatDuration(
+                                      scan.started_at,
+                                      scan.completed_at
+                                    )}`
+                                  : ""}
                                 {scan.notes ? ` · ${scan.notes}` : ""}
                               </div>
                             </div>
@@ -2971,7 +3024,10 @@ export default function App() {
       </div>
       {settingsOpen ? (
         <div className="settings-backdrop" onClick={() => setSettingsOpen(false)}>
-          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+          <div
+            className={`settings-panel ${isAdmin ? "settings-panel--large" : ""}`.trim()}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="panel-header">
               <h2>Settings</h2>
               <button className="ghost" onClick={() => setSettingsOpen(false)}>
@@ -3012,6 +3068,46 @@ export default function App() {
                   step="4"
                   value={maxLabelCap}
                   onChange={(e) => setMaxLabelCap(Number(e.target.value))}
+                />
+              </label>
+            </div>
+            <div className="settings-row">
+              <label>
+                Collecting HTTP media timeout (seconds)
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  step="1"
+                  value={httpTimeoutSeconds}
+                  onChange={(e) => {
+                    const next = Math.max(1, Number(e.target.value) || 1);
+                    setHttpTimeoutSeconds(next);
+                    setTimeoutsForUser(activeUserId || "", {
+                      http: next,
+                      asn: asnTimeoutSeconds,
+                    });
+                  }}
+                />
+              </label>
+            </div>
+            <div className="settings-row">
+              <label>
+                ASN Search Timeout (seconds)
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  step="1"
+                  value={asnTimeoutSeconds}
+                  onChange={(e) => {
+                    const next = Math.max(1, Number(e.target.value) || 1);
+                    setAsnTimeoutSeconds(next);
+                    setTimeoutsForUser(activeUserId || "", {
+                      http: httpTimeoutSeconds,
+                      asn: next,
+                    });
+                  }}
                 />
               </label>
             </div>

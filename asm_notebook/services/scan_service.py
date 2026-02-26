@@ -22,6 +22,16 @@ from ..plugins.ip_intel import lookup_asn_for_ips
 from .company_service import normalize_domain
 from .cve_service import find_cves
 
+_CANCELLED_SCANS: set[int] = set()
+
+
+class ScanCancelled(Exception):
+    pass
+
+
+def _is_cancelled(scan_id: int) -> bool:
+    return scan_id in _CANCELLED_SCANS
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -597,6 +607,8 @@ async def _collect_scan_data(
     roots: set[str],
     progress_cb: Callable[[int, int, str], None] | None = None,
     deep_scan: bool = False,
+    cancel_check: Callable[[], bool] | None = None,
+    http_timeout_seconds: float | None = None,
 ) -> tuple[
     list[str],
     list[str],
@@ -607,9 +619,14 @@ async def _collect_scan_data(
     dict[str, bool],
 ]:
     progress_cb = progress_cb or (lambda *args, **kwargs: None)
+    cancel_check = cancel_check or (lambda: False)
+    if cancel_check():
+        raise ScanCancelled()
     progress_cb(2, 6, "Collecting in-scope domains from CT")
     domains: set[str] = set()
     ct_results = await asyncio.gather(*[ct_subdomains(root) for root in roots])
+    if cancel_check():
+        raise ScanCancelled()
     for result in ct_results:
         domains.update(result)
     domains_sorted = sorted({normalize_domain(d) for d in domains})
@@ -618,6 +635,8 @@ async def _collect_scan_data(
     dns_records: list[dict[str, Any]] = []
     cname_resolves: dict[str, bool] = {}
     for domain in domains_sorted:
+        if cancel_check():
+            raise ScanCancelled()
         rec = resolve_dns(domain)
         dns_records.append(rec)
         if rec.get("ips"):
@@ -628,11 +647,21 @@ async def _collect_scan_data(
     progress_cb(2, 6, f"Collecting HTTP metadata for {len(resolvable_domains)} domains")
     web_records = []
     for domain in resolvable_domains:
-        web_records.append(await fetch_http_metadata(domain, deep_scan=deep_scan))
+        if cancel_check():
+            raise ScanCancelled()
+        web_records.append(
+            await fetch_http_metadata(
+                domain,
+                deep_scan=deep_scan,
+                timeout_seconds=http_timeout_seconds,
+            )
+        )
 
     progress_cb(2, 6, "Resolving root wildcards")
     wildcard_roots: dict[str, bool] = {}
     for root in roots:
+        if cancel_check():
+            raise ScanCancelled()
         wildcard = f"*.{root}"
         wildcard_roots[root] = bool(resolve_ips(wildcard))
 
@@ -694,7 +723,13 @@ def _collect_scan_data_test_mode(
     )
 
 
-def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> None:
+def _execute_scan(
+    scan_id: int,
+    roots: list[str],
+    deep_scan: bool = False,
+    http_timeout_seconds: float | None = None,
+    asn_timeout_seconds: float | None = None,
+) -> None:
     roots_set = set(roots)
     timings: dict[str, float] = {}
     t0 = perf_counter()
@@ -709,6 +744,8 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
 
     try:
         set_progress(1, 6, "Preparing scan")
+        if _is_cancelled(scan_id):
+            return
         if _is_test_mode():
             set_progress(2, 6, "Collecting domains (test mode)")
             (
@@ -733,17 +770,23 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 wildcard_roots,
             ) = asyncio.run(
                 _collect_scan_data(
-                    roots_set, progress_cb=set_progress, deep_scan=deep_scan
+                    roots_set,
+                    progress_cb=set_progress,
+                    deep_scan=deep_scan,
+                    cancel_check=lambda: _is_cancelled(scan_id),
+                    http_timeout_seconds=http_timeout_seconds,
                 )
             )
             timings["ct_dns_http_seconds"] = round(perf_counter() - t_step, 3)
 
-            set_progress(3, 6, "Persisting domains and DNS artifacts")
-            t_step = perf_counter()
-            with SessionLocal() as s:
-                scan = s.get(ScanRun, scan_id)
-                if not scan:
-                    return
+        if _is_cancelled(scan_id):
+            return
+        set_progress(3, 6, "Persisting domains and DNS artifacts")
+        t_step = perf_counter()
+        with SessionLocal() as s:
+            scan = s.get(ScanRun, scan_id)
+            if not scan:
+                return
 
             def upsert_artifact(atype: str, payload_obj: Any) -> None:
                 existing = s.execute(
@@ -791,6 +834,8 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
             s.commit()
             timings["persist_dns_seconds"] = round(perf_counter() - t_step, 3)
 
+            if _is_cancelled(scan_id):
+                return
             set_progress(4, 6, "Persisting web metadata")
             t_step = perf_counter()
             web_reachable = sum(1 for w in web_records if w.get("reachable"))
@@ -808,6 +853,8 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
             s.commit()
             timings["persist_web_seconds"] = round(perf_counter() - t_step, 3)
 
+            if _is_cancelled(scan_id):
+                return
             upsert_artifact("ct_enrichment", ct_enrichment)
             upsert_artifact(
                 "wildcard",
@@ -825,6 +872,8 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 },
             )
 
+            if _is_cancelled(scan_id):
+                return
             set_progress(5, 6, "Computing intel summary")
             dns_by_domain = {r.get("domain"): r for r in dns_records}
             web_by_domain = {w.get("domain"): w for w in web_records}
@@ -833,8 +882,12 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
             )
             set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
             t_asn = perf_counter()
-            asn_by_ip = lookup_asn_for_ips(unique_ips)
+            asn_by_ip = lookup_asn_for_ips(
+                unique_ips, timeout_seconds=asn_timeout_seconds
+            )
             timings["asn_lookup_seconds"] = round(perf_counter() - t_asn, 3)
+            if _is_cancelled(scan_id):
+                return
             t_intel = perf_counter()
             intel_rows = [
                 _domain_intel(
@@ -888,6 +941,14 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
             scan.completed_at = _now_utc()
             scan.notes = "6/6 Scan complete"
             s.commit()
+    except ScanCancelled:
+        with SessionLocal() as s:
+            scan = s.get(ScanRun, scan_id)
+            if scan:
+                scan.status = "cancelled"
+                scan.completed_at = _now_utc()
+                scan.notes = "Scan cancelled"
+                s.commit()
     except Exception as e:
         with SessionLocal() as s:
             scan = s.get(ScanRun, scan_id)
@@ -896,10 +957,16 @@ def _execute_scan(scan_id: int, roots: list[str], deep_scan: bool = False) -> No
                 scan.completed_at = _now_utc()
                 scan.notes = str(e)[:250]
                 s.commit()
+    finally:
+        _CANCELLED_SCANS.discard(scan_id)
 
 
 def trigger_scan(
-    slug: str, background_tasks: BackgroundTasks, deep_scan: bool = False
+    slug: str,
+    background_tasks: BackgroundTasks,
+    deep_scan: bool = False,
+    http_timeout_seconds: float | None = None,
+    asn_timeout_seconds: float | None = None,
 ) -> dict[str, Any]:
     with SessionLocal() as s:
         company = _company_by_slug(s, slug)
@@ -927,7 +994,14 @@ def trigger_scan(
         s.commit()
         s.refresh(scan)
 
-    background_tasks.add_task(_execute_scan, scan.id, sorted(roots), deep_scan)
+    background_tasks.add_task(
+        _execute_scan,
+        scan.id,
+        sorted(roots),
+        deep_scan,
+        http_timeout_seconds,
+        asn_timeout_seconds,
+    )
     return {
         "company_slug": slug,
         "scan_id": scan.id,
@@ -1081,5 +1155,19 @@ def delete_company_scan(slug: str, scan_id: int) -> None:
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
 
+        if scan.status == "running":
+            _CANCELLED_SCANS.add(scan.id)
+            scan.status = "cancelled"
+            scan.completed_at = _now_utc()
+            scan.notes = "Scan cancelled by user"
+            s.commit()
+
+        artifacts = (
+            s.execute(select(ScanArtifact).where(ScanArtifact.scan_id == scan_id))
+            .scalars()
+            .all()
+        )
+        for artifact in artifacts:
+            s.delete(artifact)
         s.delete(scan)
         s.commit()

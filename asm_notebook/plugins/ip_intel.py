@@ -17,17 +17,20 @@ def _asn_enabled() -> bool:
     return os.getenv("ASM_ASN_LOOKUP", "1").strip() != "0"
 
 
-def lookup_asn_for_ips(ips: list[str]) -> dict[str, dict[str, Any]]:
+def lookup_asn_for_ips(
+    ips: list[str], timeout_seconds: float | None = None
+) -> dict[str, dict[str, Any]]:
     if not _asn_enabled():
         return {}
     if IPWhois is None:
         return {}
 
     results: dict[str, dict[str, Any]] = {}
-    try:
-        timeout_seconds = float(os.getenv("ASM_ASN_TIMEOUT_SECONDS", "8"))
-    except Exception:
-        timeout_seconds = 8.0
+    if timeout_seconds is None:
+        try:
+            timeout_seconds = float(os.getenv("ASM_ASN_TIMEOUT_SECONDS", "5"))
+        except Exception:
+            timeout_seconds = 5.0
     for ip in ips:
         if ip in _ASN_CACHE:
             cached = _ASN_CACHE[ip]

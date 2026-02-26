@@ -47,6 +47,8 @@ class DomainReplace(BaseModel):
 
 class ScanRequest(BaseModel):
     deep_scan: bool = False
+    http_timeout_seconds: float | None = None
+    asn_timeout_seconds: float | None = None
 
 
 class CompanyUpdate(BaseModel):
@@ -98,7 +100,15 @@ def trigger_scan(
     slug: str, background_tasks: BackgroundTasks, payload: ScanRequest | None = None
 ) -> dict[str, Any]:
     deep_scan = bool(payload.deep_scan) if payload else False
-    return scan_service.trigger_scan(slug, background_tasks, deep_scan)
+    http_timeout = payload.http_timeout_seconds if payload else None
+    asn_timeout = payload.asn_timeout_seconds if payload else None
+    return scan_service.trigger_scan(
+        slug,
+        background_tasks,
+        deep_scan=deep_scan,
+        http_timeout_seconds=http_timeout,
+        asn_timeout_seconds=asn_timeout,
+    )
 
 
 @router.get("/companies/{slug}/scans")
