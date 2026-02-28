@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import logoLight from "./assets/logo-light.png";
 import logoDark from "./assets/logo-dark.png";
+import AlternateDashboard from "./components/dashboard/AlternateDashboard.jsx";
 
 const ADD_CUSTOMER_OPTION = "__add_customer__";
 const USER_STORAGE_KEY = "asm.users";
@@ -9,6 +10,7 @@ const GROUP_STORAGE_KEY = "asm.groups";
 const ACTIVE_USER_KEY = "asm.user.active";
 const COMPANY_GROUP_KEY = "asm.company.groups";
 const USER_THEME_KEY = "asm.user.theme";
+const UI_MODE_KEY = "asm.ui.mode";
 const NEW_GROUP_OPTION = "__new_group__";
 
 function readStoredJson(key, fallback) {
@@ -39,6 +41,10 @@ function setThemeForUser(userId, theme) {
   const key = userId || "__guest";
   const next = { ...map, [key]: theme };
   writeStoredJson(USER_THEME_KEY, next);
+}
+
+function normalizeUiMode(value) {
+  return value === "alternate" ? "alternate" : "default";
 }
 
 
@@ -1807,6 +1813,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(() => getThemeForUser(""));
+  const [uiMode, setUiMode] = useState(() => {
+    if (typeof window === "undefined") return "default";
+    return normalizeUiMode(window.localStorage.getItem(UI_MODE_KEY));
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -2478,6 +2488,23 @@ export default function App() {
           >
             Refresh
           </button>
+          <label className="checkbox-toggle">
+            <input
+              type="checkbox"
+              checked={deepScan}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setDeepScan(next);
+                window.localStorage.setItem("asm.scan.deep", String(next));
+              }}
+            />
+            Deep scan
+          </label>
+          {activeCompany ? (
+            <button className="ghost header-action" onClick={() => setCustomerModalOpen(true)}>
+              Manage details
+            </button>
+          ) : null}
         </div>
         <div className="status">
           <div className="status-line">
@@ -2535,12 +2562,50 @@ export default function App() {
             </div>
           ) : (
             <>
-              <section
-                ref={customerCardRef}
-                className={`card ${customerSectionOpen ? "resizable-card" : "collapsed"}`}
-                style={
-                  customerSectionOpen && customerHeight ? { height: customerHeight } : undefined
-                }
+              {uiMode === "alternate" ? (
+                <AlternateDashboard
+                  activeCompany={activeCompany}
+                  activeScan={activeScan}
+                  artifacts={artifacts}
+                  scans={scans}
+                  selectedScanId={selectedScanId}
+                  hasRunningScan={hasRunningScan}
+                  runningScan={runningScan}
+                  scanProgress={scanProgress}
+                  deepScan={deepScan}
+                  onToggleDeepScan={(next) => {
+                    setDeepScan(next);
+                    window.localStorage.setItem("asm.scan.deep", String(next));
+                  }}
+                  onManageDetails={() => setCustomerModalOpen(true)}
+                  onLoadLatest={() =>
+                    runWithStatus(async () => {
+                      const latest = await api.latestScan(activeCompany.slug);
+                      setSelectedScanId(latest.id);
+                      await loadArtifacts(activeCompany.slug, latest.id);
+                    })
+                  }
+                  onStartScan={() =>
+                    runWithStatus(async () => {
+                      await startScan(activeCompany.slug);
+                    })
+                  }
+                  onSelectScan={(scanId) =>
+                    runWithStatus(async () => {
+                      setSelectedScanId(scanId);
+                      await loadArtifacts(activeCompany.slug, scanId);
+                    })
+                  }
+                />
+              ) : null}
+              {uiMode !== "alternate" ? (
+                <>
+                <section
+                  ref={customerCardRef}
+                  className={`card ${customerSectionOpen ? "resizable-card" : "collapsed"}`}
+                  style={
+                    customerSectionOpen && customerHeight ? { height: customerHeight } : undefined
+                  }
                 onMouseUp={() => persistSectionHeight("customer", customerCardRef)}
                 onTouchEnd={() => persistSectionHeight("customer", customerCardRef)}
               >
@@ -2568,18 +2633,6 @@ export default function App() {
                     >
                       Manage details
                     </button>
-                    <label className="checkbox-toggle">
-                      <input
-                        type="checkbox"
-                        checked={deepScan}
-                        onChange={(e) => {
-                          const next = e.target.checked;
-                          setDeepScan(next);
-                          window.localStorage.setItem("asm.scan.deep", String(next));
-                        }}
-                      />
-                      Deep scan
-                    </label>
                     <button
                       disabled={scanBlocked}
                       onClick={() =>
@@ -2683,18 +2736,6 @@ export default function App() {
                     >
                       {scansSectionOpen ? "Minimize" : "Expand"}
                     </button>
-                    <label className="checkbox-toggle">
-                      <input
-                        type="checkbox"
-                        checked={deepScan}
-                        onChange={(e) => {
-                          const next = e.target.checked;
-                          setDeepScan(next);
-                          window.localStorage.setItem("asm.scan.deep", String(next));
-                        }}
-                      />
-                      Deep scan
-                    </label>
                     <button
                       disabled={scanBlocked}
                       onClick={() =>
@@ -2736,18 +2777,6 @@ export default function App() {
                           >
                             Start first scan
                           </button>
-                          <label className="checkbox-toggle">
-                            <input
-                              type="checkbox"
-                              checked={deepScan}
-                              onChange={(e) => {
-                                const next = e.target.checked;
-                                setDeepScan(next);
-                                window.localStorage.setItem("asm.scan.deep", String(next));
-                              }}
-                            />
-                            Deep scan
-                          </label>
                         </div>
                       ) : (
                         scans.map((scan) => (
@@ -2997,6 +3026,8 @@ export default function App() {
                   <div className="muted">Section minimized</div>
                 )}
               </section>
+                </>
+              ) : null}
             </>
           )}
 
@@ -3037,6 +3068,44 @@ export default function App() {
                     <span className="toggle-thumb" />
                   </span>
                 </label>
+              </div>
+            </div>
+            <div className="settings-row">
+              <div className="settings-toggle">
+                <div>
+                  <div className="settings-label">UI Mode</div>
+                  <div className="muted">
+                    {uiMode === "alternate" ? "Alternate UI" : "Default UI"}
+                  </div>
+                </div>
+                <div className="ui-mode-toggle" role="radiogroup" aria-label="UI mode">
+                  <label className={`radio-chip ${uiMode === "default" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="uiMode"
+                      value="default"
+                      checked={uiMode === "default"}
+                      onChange={() => {
+                        setUiMode("default");
+                        window.localStorage.setItem(UI_MODE_KEY, "default");
+                      }}
+                    />
+                    <span>Default</span>
+                  </label>
+                  <label className={`radio-chip ${uiMode === "alternate" ? "active" : ""}`}>
+                    <input
+                      type="radio"
+                      name="uiMode"
+                      value="alternate"
+                      checked={uiMode === "alternate"}
+                      onChange={() => {
+                        setUiMode("alternate");
+                        window.localStorage.setItem(UI_MODE_KEY, "alternate");
+                      }}
+                    />
+                    <span>Alternate</span>
+                  </label>
+                </div>
               </div>
             </div>
             <div className="settings-row">
