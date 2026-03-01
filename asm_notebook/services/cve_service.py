@@ -22,9 +22,13 @@ _PRODUCT_MAP = {
     "nginx": ("nginx", "nginx"),
     "apache": ("apache", "http_server"),
     "apache-http-server": ("apache", "http_server"),
+    "apache-httpd": ("apache", "http_server"),
     "httpd": ("apache", "http_server"),
     "microsoft-iis": ("microsoft", "iis"),
     "iis": ("microsoft", "iis"),
+    "wordpress": ("wordpress", "wordpress"),
+    "jetty": ("eclipse", "jetty"),
+    "openresty": ("openresty", "openresty"),
 }
 
 
@@ -45,6 +49,9 @@ _index_cache: dict[str, Any] = {
     "index_by_product": {},
     "index_by_vendor_product": {},
     "built": False,
+    "built_at": None,
+    "record_count": 0,
+    "cve_count": 0,
 }
 
 
@@ -141,6 +148,8 @@ def _iter_cpe_matches(configs: Any) -> list[dict[str, Any]]:
     def visit(node: dict[str, Any]) -> None:
         for match in node.get("cpeMatch") or node.get("cpe_match") or []:
             matches.append(match)
+        for sub in node.get("nodes") or []:
+            visit(sub)
         for child in node.get("children") or []:
             visit(child)
 
@@ -276,6 +285,8 @@ def _build_index(years: list[int]) -> None:
     feeds = _ensure_feeds(years)
     index_by_product: dict[str, list[dict[str, Any]]] = {}
     index_by_vendor_product: dict[str, list[dict[str, Any]]] = {}
+    seen_cves: set[str] = set()
+    record_count = 0
     for path in feeds:
         payload = _load_json(path)
         if not payload:
@@ -310,10 +321,15 @@ def _build_index(years: list[int]) -> None:
                     record
                 )
                 index_by_product.setdefault(product, []).append(record)
+                record_count += 1
+                seen_cves.add(cve_id)
     _index_cache["loaded_years"] = years
     _index_cache["index_by_product"] = index_by_product
     _index_cache["index_by_vendor_product"] = index_by_vendor_product
     _index_cache["built"] = True
+    _index_cache["built_at"] = datetime.utcnow().isoformat()
+    _index_cache["record_count"] = record_count
+    _index_cache["cve_count"] = len(seen_cves)
 
 
 def _ensure_index() -> None:
@@ -326,6 +342,60 @@ def _ensure_index() -> None:
     _build_index(years)
 
 
+def _candidate_counts(name: str) -> dict[str, int]:
+    vendor, product = _normalize_vendor_product(name)
+    index_by_product: dict[str, list[dict[str, Any]]] = _index_cache.get(
+        "index_by_product", {}
+    )
+    index_by_vendor_product: dict[str, list[dict[str, Any]]] = _index_cache.get(
+        "index_by_vendor_product", {}
+    )
+    candidates: list[dict[str, Any]] = []
+    if vendor and product:
+        candidates.extend(index_by_vendor_product.get(f"{vendor}:{product}", []))
+    if product:
+        candidates.extend(index_by_product.get(product, []))
+    unique_cves = {c.get("cve_id") for c in candidates if c.get("cve_id")}
+    return {
+        "candidates": len(candidates),
+        "unique_cves": len(unique_cves),
+    }
+
+
+def get_cve_status(sample_products: list[str] | None = None) -> dict[str, Any]:
+    _ensure_index()
+    data_dir = _data_dir()
+    files = sorted(data_dir.glob("nvdcve-*.json.gz"))
+    file_rows: list[dict[str, Any]] = []
+    latest_mtime = None
+    for path in files:
+        stat = path.stat()
+        mtime = datetime.utcfromtimestamp(stat.st_mtime).isoformat()
+        file_rows.append(
+            {
+                "name": path.name,
+                "bytes": stat.st_size,
+                "modified_utc": mtime,
+            }
+        )
+        latest_mtime = max(latest_mtime or mtime, mtime)
+    sample_products = sample_products or ["nginx", "apache", "wordpress"]
+    sample_counts = {
+        name: _candidate_counts(name) for name in sample_products if name
+    }
+    return {
+        "cache_dir": str(data_dir),
+        "cache_files": file_rows,
+        "cache_last_updated_utc": latest_mtime,
+        "loaded_years": _index_cache.get("loaded_years"),
+        "loaded_cve_records": _index_cache.get("record_count", 0),
+        "loaded_unique_cves": _index_cache.get("cve_count", 0),
+        "index_products": len(_index_cache.get("index_by_product", {})),
+        "built_at_utc": _index_cache.get("built_at"),
+        "sample_query_counts": sample_counts,
+    }
+
+
 def find_cves(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
     _ensure_index()
     index_by_product: dict[str, list[dict[str, Any]]] = _index_cache.get(
@@ -336,10 +406,10 @@ def find_cves(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
     )
     findings: list[dict[str, Any]] = []
     seen: set[str] = set()
+    possible_limit = int(os.getenv("ASM_CVE_POSSIBLE_LIMIT", "10"))
 
     for entry in reported_versions or []:
-        if entry.get("confidence") not in (None, "high"):
-            continue
+        confidence = entry.get("confidence")
         raw_name = entry.get("name") or ""
         version = entry.get("version") or ""
         vendor, product = _normalize_vendor_product(raw_name)
@@ -348,24 +418,57 @@ def find_cves(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
             candidates.extend(index_by_vendor_product.get(f"{vendor}:{product}", []))
         if product:
             candidates.extend(index_by_product.get(product, []))
-        for cve in candidates:
-            match = cve.get("match") or {}
-            cpe_version = cve.get("version") or ""
-            if cpe_version and cpe_version not in ("*", "-", "na") and version:
-                if _cmp_versions(version, cpe_version) != 0:
+        if not candidates:
+            continue
+
+        if version:
+            if confidence not in (None, "high", "medium"):
+                continue
+            for cve in candidates:
+                match = cve.get("match") or {}
+                cpe_version = cve.get("version") or ""
+                if cpe_version and cpe_version not in ("*", "-", "na"):
+                    if _cmp_versions(version, cpe_version) != 0:
+                        continue
+                if any(
+                    match.get(key)
+                    for key in (
+                        "versionStartIncluding",
+                        "versionStartExcluding",
+                        "versionEndIncluding",
+                        "versionEndExcluding",
+                    )
+                ):
+                    if not _version_in_range(version, match):
+                        continue
+                key = f"{cve.get('cve_id')}:{raw_name}:{version}"
+                if key in seen:
                     continue
-            if any(
-                match.get(key)
-                for key in (
-                    "versionStartIncluding",
-                    "versionStartExcluding",
-                    "versionEndIncluding",
-                    "versionEndExcluding",
+                seen.add(key)
+                findings.append(
+                    {
+                        "cve": cve.get("cve_id"),
+                        "component": raw_name,
+                        "version": version,
+                        "severity": cve.get("severity") or "Unknown",
+                        "score": cve.get("score"),
+                        "vector": cve.get("vector"),
+                        "source": "nvd",
+                        "match_tier": "probable",
+                        "match_reason": "version_match",
+                    }
                 )
-            ):
-                if not _version_in_range(version, match):
-                    continue
-            key = f"{cve.get('cve_id')}:{raw_name}:{version}"
+            continue
+
+        if confidence not in (None, "high", "medium", "low"):
+            continue
+        sorted_candidates = sorted(
+            candidates,
+            key=lambda row: (row.get("score") or 0.0),
+            reverse=True,
+        )
+        for cve in sorted_candidates[:possible_limit]:
+            key = f"{cve.get('cve_id')}:{raw_name}:possible"
             if key in seen:
                 continue
             seen.add(key)
@@ -373,11 +476,13 @@ def find_cves(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
                 {
                     "cve": cve.get("cve_id"),
                     "component": raw_name,
-                    "version": version,
+                    "version": "",
                     "severity": cve.get("severity") or "Unknown",
                     "score": cve.get("score"),
                     "vector": cve.get("vector"),
                     "source": "nvd",
+                    "match_tier": "possible",
+                    "match_reason": "product_only",
                 }
             )
     return findings

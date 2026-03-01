@@ -12,6 +12,7 @@ from typing import Any, Callable
 import httpx
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Company, ScanArtifact, ScanRun
@@ -284,6 +285,149 @@ def _compute_exposure_score(row: dict[str, Any]) -> tuple[int, list[str]]:
 
 def _cve_findings(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
     return find_cves(reported_versions or [])
+
+
+def build_cve_debug(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    domain_rows: list[dict[str, Any]] = []
+    total_versions = 0
+    total_products = 0
+    for row in intel_rows:
+        web = row.get("web") or {}
+        versions = web.get("reported_versions") or []
+        products = web.get("technologies") or []
+        total_versions += len(versions)
+        total_products += len(products)
+        domain_rows.append(
+            {
+                "domain": row.get("domain"),
+                "reported_versions": versions,
+                "technologies": products,
+            }
+        )
+    return {
+        "domain_count": len(intel_rows),
+        "domains_with_versions": sum(1 for r in domain_rows if r["reported_versions"]),
+        "domains_with_products": sum(1 for r in domain_rows if r["technologies"]),
+        "reported_versions_total": total_versions,
+        "technologies_total": total_products,
+        "domains": domain_rows,
+    }
+
+
+def _cve_debug_summary(payload: dict[str, Any] | None) -> dict[str, Any]:
+    if not payload:
+        return {}
+    keys = (
+        "domain_count",
+        "domains_with_versions",
+        "domains_with_products",
+        "reported_versions_total",
+        "technologies_total",
+    )
+    return {key: payload.get(key, 0) for key in keys}
+
+
+def _load_cve_debug_summary(s: Session, scan_id: int) -> dict[str, Any]:
+    row = s.execute(
+        select(ScanArtifact).where(
+            ScanArtifact.scan_id == scan_id,
+            ScanArtifact.artifact_type == "cve_debug",
+        )
+    ).scalar_one_or_none()
+    if not row:
+        return {}
+    try:
+        payload = json.loads(row.json_text) or {}
+    except Exception:
+        return {}
+    return _cve_debug_summary(payload)
+
+
+def _load_cve_debug_summary_map(
+    s: Session, scan_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    if not scan_ids:
+        return {}
+    rows = (
+        s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id.in_(scan_ids),
+                ScanArtifact.artifact_type == "cve_debug",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    summaries: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            payload = json.loads(row.json_text) or {}
+        except Exception:
+            payload = {}
+        summaries[row.scan_id] = _cve_debug_summary(payload)
+    return summaries
+
+
+def _load_prev_ct_domains_by_root(
+    s: Session, scan: ScanRun
+) -> dict[str, list[str]]:
+    prev_scans = (
+        s.execute(
+            select(ScanRun)
+            .where(
+                ScanRun.company_id == scan.company_id,
+                ScanRun.company_scan_number < scan.company_scan_number,
+            )
+            .order_by(ScanRun.company_scan_number.desc())
+            .limit(8)
+        )
+        .scalars()
+        .all()
+    )
+    if not prev_scans:
+        return {}
+    for prev_scan in prev_scans:
+        artifact = s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id == prev_scan.id,
+                ScanArtifact.artifact_type == "ct_enrichment",
+            )
+        ).scalar_one_or_none()
+        if artifact:
+            try:
+                payload = json.loads(artifact.json_text) or {}
+            except Exception:
+                payload = {}
+            ct_by_root = payload.get("ct_domains_by_root") or {}
+            if isinstance(ct_by_root, dict) and any(ct_by_root.values()):
+                return {
+                    str(root): [str(d) for d in domains or []]
+                    for root, domains in ct_by_root.items()
+                }
+
+        domains_artifact = s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id == prev_scan.id,
+                ScanArtifact.artifact_type == "domains",
+            )
+        ).scalar_one_or_none()
+        if not domains_artifact:
+            continue
+        try:
+            payload = json.loads(domains_artifact.json_text) or {}
+        except Exception:
+            continue
+        roots = [str(r) for r in (payload.get("roots") or [])]
+        domains = [str(d) for d in (payload.get("domains") or [])]
+        if not roots or len(domains) <= len(roots):
+            continue
+        ct_by_root = {
+            root: [d for d in domains if d == root or d.endswith("." + root)]
+            for root in roots
+        }
+        if any(ct_by_root.values()):
+            return ct_by_root
+    return {}
 
 
 def _flatten_cert_entity(entity: Any) -> str:
@@ -612,6 +756,7 @@ async def _collect_scan_data(
     progress_cb: Callable[[int, int, str], None] | None = None,
     deep_scan: bool = False,
     cancel_check: Callable[[], bool] | None = None,
+    previous_ct_by_root: dict[str, list[str]] | None = None,
 ) -> tuple[
     list[str],
     list[str],
@@ -623,15 +768,26 @@ async def _collect_scan_data(
 ]:
     progress_cb = progress_cb or (lambda *args, **kwargs: None)
     cancel_check = cancel_check or (lambda: False)
+    previous_ct_by_root = previous_ct_by_root or {}
     if cancel_check():
         raise ScanCancelled()
     progress_cb(2, 6, "Collecting in-scope domains from CT")
     domains: set[str] = set()
-    ct_results = await asyncio.gather(*[ct_subdomains(root) for root in roots])
+    domains.update(roots)
+    roots_list = sorted(roots)
+    ct_results = await asyncio.gather(*[ct_subdomains(root) for root in roots_list])
     if cancel_check():
         raise ScanCancelled()
-    for result in ct_results:
-        domains.update(result)
+    ct_domains_by_root: dict[str, list[str]] = {}
+    reused_roots: list[str] = []
+    for root, result in zip(roots_list, ct_results):
+        fallback = set(previous_ct_by_root.get(root) or [])
+        result_set = set(result or [])
+        merged = result_set | fallback
+        if fallback and fallback - result_set:
+            reused_roots.append(root)
+        ct_domains_by_root[root] = sorted(merged)
+        domains.update(merged)
     domains_sorted = sorted({normalize_domain(d) for d in domains})
     progress_cb(2, 6, f"Resolving DNS for {len(domains_sorted)} domains")
     resolvable_domains = []
@@ -663,9 +819,11 @@ async def _collect_scan_data(
         wildcard_roots[root] = bool(resolve_ips(wildcard))
 
     ct_enrichment = {
-        "roots": sorted(roots),
+        "roots": roots_list,
         "ct_hostnames": len(domains_sorted),
         "suspicious_hostnames": [],
+        "ct_domains_by_root": ct_domains_by_root,
+        "ct_reused_roots": reused_roots,
     }
     return (
         domains_sorted,
@@ -715,7 +873,13 @@ def _collect_scan_data_test_mode(
         dns_records,
         [],
         {},
-        {"roots": [], "ct_hostnames": 0, "suspicious_hostnames": []},
+        {
+            "roots": sorted(roots),
+            "ct_hostnames": 0,
+            "suspicious_hostnames": [],
+            "ct_domains_by_root": {},
+            "ct_reused_roots": [],
+        },
         {},
     )
 
@@ -741,6 +905,11 @@ def _execute_scan(
         set_progress(1, 6, "Preparing scan")
         if _is_cancelled(scan_id):
             return
+        prev_ct_by_root: dict[str, list[str]] = {}
+        with SessionLocal() as s:
+            scan = s.get(ScanRun, scan_id)
+            if scan:
+                prev_ct_by_root = _load_prev_ct_domains_by_root(s, scan)
         if _is_test_mode():
             set_progress(2, 6, "Collecting domains (test mode)")
             (
@@ -769,6 +938,7 @@ def _execute_scan(
                     progress_cb=set_progress,
                     deep_scan=deep_scan,
                     cancel_check=lambda: _is_cancelled(scan_id),
+                    previous_ct_by_root=prev_ct_by_root,
                 )
             )
             timings["ct_dns_http_seconds"] = round(perf_counter() - t_step, 3)
@@ -884,6 +1054,7 @@ def _execute_scan(
             if _is_cancelled(scan_id):
                 return
             t_intel = perf_counter()
+            include_cve = os.getenv("ASM_CVE_INCLUDE", "1").strip() == "1"
             intel_rows = [
                 _domain_intel(
                     d,
@@ -893,11 +1064,12 @@ def _execute_scan(
                     asn_by_ip=asn_by_ip,
                     cname_targets=cname_resolves,
                     wildcard_roots=wildcard_roots,
-                    include_cve=deep_scan,
+                    include_cve=include_cve,
                 )
                 for d in domains_sorted
             ]
             timings["intel_build_seconds"] = round(perf_counter() - t_intel, 3)
+            cve_debug = build_cve_debug(intel_rows)
             prev_intel_rows: list[dict[str, Any]] | None = None
             prev_scan = s.execute(
                 select(ScanRun).where(
@@ -925,6 +1097,7 @@ def _execute_scan(
                     "summary": _intel_summary(intel_rows),
                 },
             )
+            upsert_artifact("cve_debug", cve_debug)
             upsert_artifact(
                 "change_summary",
                 _change_summary(intel_rows, prev_intel_rows),
@@ -1033,6 +1206,7 @@ def list_scans(slug: str) -> list[dict[str, Any]]:
         )
         scan_ids = [sc.id for sc in scans]
         scan_meta: dict[int, dict[str, Any]] = {}
+        cve_summaries = _load_cve_debug_summary_map(s, scan_ids)
         if scan_ids:
             meta_rows = (
                 s.execute(
@@ -1058,6 +1232,7 @@ def list_scans(slug: str) -> list[dict[str, Any]]:
                 "completed_at": sc.completed_at,
                 "notes": sc.notes,
                 "scan_mode": (scan_meta.get(sc.id) or {}).get("mode", ""),
+                "cve_debug_summary": cve_summaries.get(sc.id, {}),
             }
             for sc in scans
         ]
@@ -1093,6 +1268,7 @@ def get_latest_scan(slug: str) -> dict[str, Any]:
                 scan_mode = (json.loads(meta.json_text) or {}).get("mode", "")
             except Exception:
                 scan_mode = ""
+        cve_summary = _load_cve_debug_summary(s, scan.id)
         return {
             "id": scan.id,
             "company_scan_number": scan.company_scan_number,
@@ -1101,6 +1277,7 @@ def get_latest_scan(slug: str) -> dict[str, Any]:
             "completed_at": scan.completed_at,
             "notes": scan.notes,
             "scan_mode": scan_mode,
+            "cve_debug_summary": cve_summary,
         }
 
 
@@ -1129,6 +1306,7 @@ def get_company_scan(slug: str, scan_id: int) -> dict[str, Any]:
                 scan_mode = (json.loads(meta.json_text) or {}).get("mode", "")
             except Exception:
                 scan_mode = ""
+        cve_summary = _load_cve_debug_summary(s, scan.id)
         return {
             "id": scan.id,
             "company_scan_number": scan.company_scan_number,
@@ -1137,6 +1315,7 @@ def get_company_scan(slug: str, scan_id: int) -> dict[str, Any]:
             "completed_at": scan.completed_at,
             "notes": scan.notes,
             "scan_mode": scan_mode,
+            "cve_debug_summary": cve_summary,
         }
 
 
@@ -1166,6 +1345,7 @@ def get_company_scan_by_number(slug: str, company_scan_number: int) -> dict[str,
                 scan_mode = (json.loads(meta.json_text) or {}).get("mode", "")
             except Exception:
                 scan_mode = ""
+        cve_summary = _load_cve_debug_summary(s, scan.id)
         return {
             "id": scan.id,
             "company_scan_number": scan.company_scan_number,
@@ -1174,6 +1354,7 @@ def get_company_scan_by_number(slug: str, company_scan_number: int) -> dict[str,
             "completed_at": scan.completed_at,
             "notes": scan.notes,
             "scan_mode": scan_mode,
+            "cve_debug_summary": cve_summary,
         }
 
 

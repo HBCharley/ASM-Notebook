@@ -2374,6 +2374,36 @@ button.danger.ghost {
   color: var(--muted);
 }
 
+.exec-pill-critical {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.exec-pill-high {
+  border-color: rgba(249, 115, 22, 0.4);
+  color: #fed7aa;
+  background: rgba(249, 115, 22, 0.18);
+}
+
+.exec-pill-medium {
+  border-color: rgba(59, 130, 246, 0.4);
+  color: #bfdbfe;
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.exec-pill-low {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.exec-pill-total {
+  border-color: rgba(16, 185, 129, 0.45);
+  color: #bbf7d0;
+  background: rgba(16, 185, 129, 0.18);
+}
+
 .exec-quick-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -2582,6 +2612,37 @@ button.danger.ghost {
   flex-direction: column;
   gap: 10px;
   min-height: 240px;
+}
+
+.soc-cves {
+  min-height: 0;
+}
+
+.soc-cve-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.soc-cve-card {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+}
+
+.soc-cve-card.soc-cve-total {
+  grid-column: span 2;
+}
+
+.soc-cve-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.soc-cve-value {
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .soc-panel-header {

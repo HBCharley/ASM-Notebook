@@ -1,5 +1,6 @@
 import React, { useMemo } from "react";
 import { DrilldownModal, useDrilldown } from "../../lib/drilldown.jsx";
+import { countFindingsBySeverity, filterFindings } from "../../lib/cveSeverity.js";
 
 const KPI_SPARKS = [
   [6, 8, 9, 12, 11, 13, 15, 16, 18, 19],
@@ -97,6 +98,7 @@ export default function ExecutiveDashboard({
   runningScan,
   scanProgress,
   deepScan,
+  minCveSeverity,
   onToggleDeepScan,
   onManageDetails,
   onLoadLatest,
@@ -127,13 +129,21 @@ export default function ExecutiveDashboard({
   const webHosts = intelDomains.filter(
     (row) => row?.web?.reachable || Number(row?.web?.status_code ?? 0) > 0
   ).length;
-  const criticalCves = intelDomains.reduce((sum, row) => {
-    const findings = row?.cve_findings || [];
-    return (
-      sum +
-      findings.filter((entry) => Number(entry?.score ?? 0) >= 9).length
-    );
-  }, 0);
+  const allCveFindings = useMemo(() => {
+    const items = [];
+    intelDomains.forEach((row) => {
+      (row?.cve_findings || []).forEach((entry) => items.push(entry));
+    });
+    return items;
+  }, [intelDomains]);
+  const visibleCveFindings = useMemo(
+    () => filterFindings(allCveFindings, minCveSeverity),
+    [allCveFindings, minCveSeverity]
+  );
+  const cveCounts = useMemo(
+    () => countFindingsBySeverity(visibleCveFindings),
+    [visibleCveFindings]
+  );
 
   const exposureScoreAvg = artifacts?.dns_intel?.summary?.exposure_score_avg;
   const exposureScoreFallback = intelDomains.length
@@ -217,11 +227,11 @@ export default function ExecutiveDashboard({
         action: "Review edge coverage",
       });
     }
-    if (criticalCves) {
+    if (cveCounts.Total) {
       items.push({
         id: "cves",
-        label: `${criticalCves} critical CVEs observed in web exposure`,
-        severity: "critical",
+        label: `${cveCounts.Total} CVE findings at or above ${minCveSeverity}`,
+        severity: "high",
         action: "Open vulnerability list",
       });
     }
@@ -260,7 +270,7 @@ export default function ExecutiveDashboard({
       });
     }
     return items.slice(0, 8);
-  }, [artifacts, intelDomains, criticalCves]);
+  }, [artifacts, intelDomains, cveCounts.Total, minCveSeverity]);
 
   const mailSummary = artifacts?.dns_intel?.summary || {};
   const tlsSoonCount = intelDomains.reduce((sum, row) => {
@@ -304,8 +314,8 @@ export default function ExecutiveDashboard({
     },
     {
       key: "cves",
-      label: "Critical CVEs",
-      value: criticalCves,
+      label: "CVE Findings",
+      value: cveCounts.Total,
       delta: changeDelta?.cves || null,
       spark: KPI_SPARKS[3],
       detailKey: "vulnerabilities",
@@ -342,6 +352,7 @@ export default function ExecutiveDashboard({
     mailSummary,
     tlsSoonCount,
     riskCounts,
+    minCveSeverity,
   });
 
   return (
@@ -464,6 +475,49 @@ export default function ExecutiveDashboard({
                   </button>
                 );
               })}
+            </div>
+          </div>
+        </div>
+
+        <div className="exec-panel exec-cves">
+          <div className="exec-panel-header">
+            <h3>CVE Severity</h3>
+            <span className="exec-panel-meta">Min: {minCveSeverity}</span>
+            <button className="ghost" onClick={() => openDetail("vulnerabilities")}>
+              View details
+            </button>
+          </div>
+          <div className="exec-coverage-grid">
+            <div className="exec-coverage-card">
+              <div className="exec-coverage-title">Filtered findings</div>
+              <div className="exec-coverage-meta">
+                {cveCounts.Total} total shown
+              </div>
+              <div className="exec-coverage-pills">
+                <span className="exec-pill exec-pill-critical">
+                  Critical {cveCounts.Critical}
+                </span>
+                <span className="exec-pill exec-pill-high">
+                  High {cveCounts.High}
+                </span>
+                <span className="exec-pill exec-pill-medium">
+                  Medium {cveCounts.Medium}
+                </span>
+                <span className="exec-pill exec-pill-low">
+                  Low {cveCounts.Low}
+                </span>
+              </div>
+            </div>
+            <div className="exec-coverage-card">
+              <div className="exec-coverage-title">Totals</div>
+              <div className="exec-coverage-meta">
+                Display-only filter, artifacts unchanged
+              </div>
+              <div className="exec-coverage-pills">
+                <span className="exec-pill exec-pill-total">
+                  Total {cveCounts.Total}
+                </span>
+              </div>
             </div>
           </div>
         </div>

@@ -8,7 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .init_db import init_db
-from .services import company_service, scan_service
+import json
+
+from sqlalchemy import select
+
+from .services import company_service, scan_service, cve_service
+from .db import SessionLocal
+from .models import Company, ScanArtifact, ScanRun
 
 app = FastAPI(
     title="ASM Notebook API",
@@ -71,6 +77,58 @@ def root_health() -> dict[str, bool]:
 @router.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
+
+
+@router.get("/debug/cve")
+def cve_debug(keywords: str | None = None) -> dict[str, Any]:
+    samples = [k.strip() for k in (keywords or "").split(",") if k.strip()]
+    return cve_service.get_cve_status(samples or None)
+
+
+@router.get("/debug/cve/evidence")
+def cve_evidence(
+    company_slug: str,
+    scan_id: int | None = None,
+    domain: str | None = None,
+) -> dict[str, Any]:
+    with SessionLocal() as s:
+        company = (
+            s.execute(select(Company).where(Company.slug == company_slug))
+            .scalars()
+            .first()
+        )
+        if not company:
+            return {"error": "company_not_found"}
+        if scan_id is None:
+            scan = (
+                s.execute(
+                    select(ScanRun)
+                    .where(ScanRun.company_id == company.id)
+                    .order_by(ScanRun.company_scan_number.desc())
+                )
+                .scalars()
+                .first()
+            )
+        else:
+            scan = s.get(ScanRun, scan_id)
+            if scan and scan.company_id != company.id:
+                scan = None
+        if not scan:
+            return {"error": "scan_not_found"}
+        art = s.execute(
+            select(ScanArtifact).where(
+                ScanArtifact.scan_id == scan.id,
+                ScanArtifact.artifact_type == "dns_intel",
+            )
+        ).scalar_one_or_none()
+        if not art:
+            return {"error": "dns_intel_not_found"}
+        payload = json.loads(art.json_text)
+        domains = payload.get("domains") or []
+        if domain:
+            d = domain.lower().strip(".")
+            domains = [row for row in domains if str(row.get("domain", "")).lower() == d]
+        return scan_service.build_cve_debug(domains)
 
 
 @router.post("/companies", status_code=201)

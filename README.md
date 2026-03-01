@@ -41,6 +41,9 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - `ASM_NVD_REFRESH=1` to force re-download
 - `ASM_NVD_DISABLE=1` to skip CVE lookups
 - Cache warm-up: run any scan once (or hit any scan endpoint that returns artifacts) to trigger the initial NVD download.
+- Debug CVE cache status:
+  - `GET /v1/debug/cve`
+  - `poetry run python -m asm_notebook.cli cve status --keyword nginx --keyword apache --keyword wordpress`
 
 ## ASN Lookups
 
@@ -219,7 +222,9 @@ Notes:
   - Starting a scan shows an in-progress visualization
   - New scan starts are blocked while a scan is running
   - Scans are tagged as `Standard` or `Deep` based on the toggle
-  - Deep scan toggle expands HTTP enrichment (additional paths + fingerprints)
+- Deep scan toggle expands HTTP enrichment (additional paths + fingerprints)
+- Standard and deep scans both run CT discovery; if CT is unavailable, the scanner reuses
+  the most recent CT/domain cache so standard scans keep the full domain set.
 - Artifacts visualization:
   - Interactive hub/spoke graph for scope roots and discovered domains
   - Optional `Tree view` (`Scope Browser`) to navigate roots/domains and focus graph nodes

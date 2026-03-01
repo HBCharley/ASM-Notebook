@@ -31,6 +31,8 @@ services:
       ASM_TEST_MODE: ${ASM_TEST_MODE:-0}
     ports:
       - "8000:8000"
+    volumes:
+      - cve_cache:/app/asm_notebook/data/nvd
     healthcheck:
       test: [
         "CMD",
@@ -56,3 +58,4 @@ services:
 
 volumes:
   postgres_data:
+  cve_cache:

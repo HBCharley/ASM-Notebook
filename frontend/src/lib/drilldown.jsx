@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { classifySeverity, severityRank } from "./cveSeverity.js";
 
 function daysUntil(dateValue) {
   if (!dateValue) return null;
@@ -22,23 +23,26 @@ export function buildDrilldownPayload({
   mailSummary,
   tlsSoonCount,
   riskCounts,
+  minCveSeverity,
 }) {
   const intelDomains = artifacts?.dns_intel?.domains || [];
   const changeSummary = artifacts?.change_summary || null;
 
-  const criticalRows = [];
+  const minRank = severityRank(minCveSeverity);
+  const cveRows = [];
   intelDomains.forEach((row) => {
     const rows = row?.cve_findings || [];
     rows.forEach((entry) => {
       const score = Number(entry?.score ?? 0);
-      if (score >= 9) {
-        criticalRows.push({
-          title: `${entry.cve || "CVE"} · ${entry.component || "component"} ${
-            entry.version || ""
-          }`.trim(),
-          meta: `${row.domain || "domain"} · score ${score}`,
-        });
-      }
+      const severity = classifySeverity(score);
+      if (severityRank(severity) < minRank) return;
+      cveRows.push({
+        title: `${entry.cve || "CVE"} · ${entry.component || "component"} ${
+          entry.version || ""
+        }`.trim(),
+        meta: `${row.domain || "domain"} · ${severity} · score ${score}`,
+        score,
+      });
     });
   });
 
@@ -189,9 +193,12 @@ export function buildDrilldownPayload({
       rows: newIps.map((ip) => ({ title: ip, meta: "new" })),
     },
     vulnerabilities: {
-      title: "Critical CVEs",
-      subtitle: `${criticalRows.length} findings with score 9.0+`,
-      rows: criticalRows,
+      title: "CVE Findings",
+      subtitle: `${cveRows.length} findings at or above ${minCveSeverity}`,
+      rows: cveRows
+        .slice()
+        .sort((a, b) => b.score - a.score)
+        .map(({ score, ...row }) => row),
     },
     exposure: {
       title: "Exposure Scores",

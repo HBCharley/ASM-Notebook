@@ -14,6 +14,7 @@ from .db import SessionLocal
 from .models import Company, CompanyDomain, ScanRun, ScanArtifact
 from .plugins.ct import ct_subdomains
 from .plugins.dns import resolve_dns
+from .services import cve_service
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -94,6 +95,19 @@ def company_show(slug: str):
 # -------------------------
 scan_app = typer.Typer(no_args_is_help=True)
 app.add_typer(scan_app, name="scan")
+
+# -------------------------
+# CVE commands
+# -------------------------
+cve_app = typer.Typer(no_args_is_help=True)
+app.add_typer(cve_app, name="cve")
+
+@cve_app.command("status")
+def cve_status(keyword: list[str] = typer.Option(None, "--keyword")):
+    """Print CVE cache status and sample query counts."""
+    status = cve_service.get_cve_status(keyword or None)
+    print_json = json.dumps(status, indent=2)
+    print(print_json)
 
 def _in_scope(domain: str, roots: set[str]) -> bool:
     d = domain.lower().strip(".")

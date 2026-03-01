@@ -19,6 +19,17 @@ _GENERATOR_RE = re.compile(
     re.IGNORECASE,
 )
 _VERSION_RE = re.compile(r"(?P<name>[A-Za-z][A-Za-z0-9._+-]*)/(?P<ver>\d[^\s;,]*)")
+_JETTY_RE = re.compile(r"Jetty\((?P<ver>[^)]+)\)", re.IGNORECASE)
+_WP_VER_RE = re.compile(r"wp-(?:content|includes)/[^\"' ]+\\?ver=(?P<ver>[0-9.]+)")
+_JQUERY_RE = re.compile(r"jquery[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_BOOTSTRAP_RE = re.compile(r"bootstrap(?:\\.min)?(?:\\.bundle)?[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_JQUERY_UI_RE = re.compile(r"jquery-ui[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_REACT_RE = re.compile(r"react(?:\\.min)?[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_VUE_RE = re.compile(r"vue(?:\\.min)?[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_ANGULAR_RE = re.compile(r"angular(?:\\.min)?[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_MOMENT_RE = re.compile(r"moment(?:\\.min)?[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_LODASH_RE = re.compile(r"lodash(?:\\.min)?[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
+_FONT_AWESOME_RE = re.compile(r"font-?awesome[-.](?P<ver>[0-9]+\.[0-9]+\.[0-9]+)", re.IGNORECASE)
 _AUX_FETCH_LIMIT = 262144
 _FAVICON_FETCH_LIMIT = 524288
 _TECH_PATTERNS = [
@@ -137,7 +148,17 @@ def _extract_reported_versions(
 ) -> list[dict[str, str]]:
     versions: list[dict[str, str]] = []
 
-    for header_key in ("server", "x-powered-by"):
+    for header_key in (
+        "server",
+        "x-powered-by",
+        "x-aspnet-version",
+        "x-aspnetmvc-version",
+        "x-generator",
+        "x-runtime",
+        "x-mod-pagespeed",
+        "x-drupal-cache",
+        "x-joomla-cache",
+    ):
         value = headers.get(header_key, "")
         if not value:
             continue
@@ -148,29 +169,145 @@ def _extract_reported_versions(
                     "version": m.group("ver"),
                     "source": f"header:{header_key}",
                     "confidence": "high",
+                    "evidence": {"type": "header", "key": header_key, "value": value},
+                }
+            )
+        jetty = _JETTY_RE.search(value)
+        if jetty:
+            versions.append(
+                {
+                    "name": "jetty",
+                    "version": jetty.group("ver"),
+                    "source": f"header:{header_key}",
+                    "confidence": "high",
+                    "evidence": {"type": "header", "key": header_key, "value": value},
                 }
             )
 
-    gen = _GENERATOR_RE.search(body)
-    if gen:
-        content = gen.group(1).strip()
-        m = _VERSION_RE.search(content)
-        if m:
+    if body:
+        gen = _GENERATOR_RE.search(body)
+        if gen:
+            content = gen.group(1).strip()
+            m = _VERSION_RE.search(content)
+            if m:
+                versions.append(
+                    {
+                        "name": m.group("name"),
+                        "version": m.group("ver"),
+                        "source": "meta:generator",
+                        "confidence": "medium",
+                        "evidence": {"type": "meta", "key": "generator", "value": content},
+                    }
+                )
+            else:
+                versions.append(
+                    {
+                        "name": content,
+                        "version": "",
+                        "source": "meta:generator",
+                        "confidence": "low",
+                        "evidence": {"type": "meta", "key": "generator", "value": content},
+                    }
+                )
+
+        for m in _WP_VER_RE.finditer(body):
             versions.append(
                 {
-                    "name": m.group("name"),
+                    "name": "wordpress",
                     "version": m.group("ver"),
-                    "source": "meta:generator",
+                    "source": "html:asset",
                     "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "wp", "value": m.group(0)},
                 }
             )
-        else:
+        for m in _JQUERY_RE.finditer(body):
             versions.append(
                 {
-                    "name": content,
-                    "version": "",
-                    "source": "meta:generator",
-                    "confidence": "low",
+                    "name": "jquery",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "jquery", "value": m.group(0)},
+                }
+            )
+        for m in _BOOTSTRAP_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "bootstrap",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "bootstrap", "value": m.group(0)},
+                }
+            )
+        for m in _JQUERY_UI_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "jquery-ui",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "jquery-ui", "value": m.group(0)},
+                }
+            )
+        for m in _REACT_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "react",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "react", "value": m.group(0)},
+                }
+            )
+        for m in _VUE_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "vue",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "vue", "value": m.group(0)},
+                }
+            )
+        for m in _ANGULAR_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "angular",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "angular", "value": m.group(0)},
+                }
+            )
+        for m in _MOMENT_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "moment",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "moment", "value": m.group(0)},
+                }
+            )
+        for m in _LODASH_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "lodash",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "lodash", "value": m.group(0)},
+                }
+            )
+        for m in _FONT_AWESOME_RE.finditer(body):
+            versions.append(
+                {
+                    "name": "font-awesome",
+                    "version": m.group("ver"),
+                    "source": "html:asset",
+                    "confidence": "medium",
+                    "evidence": {"type": "asset", "key": "font-awesome", "value": m.group(0)},
                 }
             )
 
@@ -194,7 +331,12 @@ def _detect_technologies(body: str, headers: dict[str, str]) -> list[dict[str, s
             str(headers.get("server", "")),
             str(headers.get("x-powered-by", "")),
             str(headers.get("x-aspnet-version", "")),
+            str(headers.get("x-aspnetmvc-version", "")),
             str(headers.get("x-generator", "")),
+            str(headers.get("x-drupal-cache", "")),
+            str(headers.get("x-joomla-cache", "")),
+            str(headers.get("x-runtime", "")),
+            str(headers.get("x-mod-pagespeed", "")),
         ]
     ).lower()
 
@@ -457,10 +599,12 @@ async def fetch_http_metadata(
             url = f"{scheme}://{domain}"
             try:
                 resp = await client.get(url)
+                content_type = (resp.headers.get("content-type") or "").lower()
                 body = ""
                 title = ""
-                if deep_scan:
+                if "text/" in content_type or "html" in content_type or not content_type:
                     body = resp.text[:6000] if resp.text else ""
+                if body:
                     m = _TITLE_RE.search(body)
                     title = m.group(1).strip() if m else ""
                 interesting = {}
@@ -468,7 +612,17 @@ async def fetch_http_metadata(
                     "server",
                     "via",
                     "x-powered-by",
+                    "x-aspnet-version",
+                    "x-aspnetmvc-version",
+                    "x-generator",
+                    "x-runtime",
+                    "x-drupal-cache",
+                    "x-joomla-cache",
+                    "x-mod-pagespeed",
+                    "x-request-id",
+                    "x-cdn",
                     "x-cache",
+                    "x-cache-hits",
                     "x-served-by",
                     "cf-ray",
                     "x-amz-cf-id",
@@ -489,14 +643,10 @@ async def fetch_http_metadata(
                         security_headers[k] = resp.headers.get(k, "")
                 lowered_headers = {k.lower(): v for k, v in resp.headers.items()}
                 fingerprints: list[str] = []
-                reported_versions: list[dict[str, str]] = []
-                technologies: list[dict[str, str]] = []
-                if deep_scan:
+                reported_versions = _extract_reported_versions(lowered_headers, body)
+                technologies = _detect_technologies(body, lowered_headers)
+                if deep_scan and body:
                     fingerprints = _fingerprint_html(body, lowered_headers)
-                    reported_versions = _extract_reported_versions(
-                        lowered_headers, body
-                    )
-                    technologies = _detect_technologies(body, lowered_headers)
                 hsts = _parse_hsts(resp.headers.get("strict-transport-security"))
                 cloud_storage = _detect_cloud_storage(body, resp.url, lowered_headers)
                 tls_info: dict[str, Any] = {}

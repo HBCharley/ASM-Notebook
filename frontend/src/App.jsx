@@ -5,6 +5,11 @@ import logoDark from "./assets/logo-dark.png";
 import ExecutiveDashboard from "./components/dashboard/ExecutiveDashboard.jsx";
 import SocDashboard from "./components/dashboard/SocDashboard.jsx";
 import ViewModeSwitcher from "./components/ViewModeSwitcher.jsx";
+import {
+  classifySeverity,
+  filterFindings,
+  countFindingsBySeverity,
+} from "./lib/cveSeverity.js";
 
 const ADD_CUSTOMER_OPTION = "__add_customer__";
 const USER_STORAGE_KEY = "asm.users";
@@ -14,6 +19,7 @@ const COMPANY_GROUP_KEY = "asm.company.groups";
 const USER_THEME_KEY = "asm.user.theme";
 const UI_MODE_KEY = "asm_ui_mode";
 const NEW_GROUP_OPTION = "__new_group__";
+const MIN_CVE_SEVERITY_KEY = "asm_settings_min_cve_severity";
 
 function readStoredJson(key, fallback) {
   if (typeof window === "undefined") return fallback;
@@ -221,7 +227,7 @@ function formatCertEntity(entity) {
   return String(entity);
 }
 
-function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
+function DomainRelationshipGraph({ artifacts, maxLabelCap = 36, minCveSeverity }) {
   const [hoveredKey, setHoveredKey] = useState(null);
   const [selectedKey, setSelectedKey] = useState(null);
   const [treeOpen, setTreeOpen] = useState(false);
@@ -947,6 +953,8 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
   const exposureScore = nodeIntel?.exposure_score ?? null;
   const exposureFactors = nodeIntel?.exposure_factors || [];
   const cveFindings = nodeIntel?.cve_findings || [];
+  const visibleCveFindings = filterFindings(cveFindings, minCveSeverity);
+  const cveCounts = countFindingsBySeverity(visibleCveFindings);
   const certNotBefore =
     tls?.cert?.not_before ||
     tls?.cert?.notBefore ||
@@ -1696,11 +1704,16 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                       </div>
                     </details>
                   ) : null}
-                  {cveFindings.length ? (
+                  {visibleCveFindings.length ? (
                     <details className="graph-details">
                       <summary>CVE findings</summary>
+                      <div className="muted">
+                        Critical {cveCounts.Critical} · High {cveCounts.High} · Medium{" "}
+                        {cveCounts.Medium} · Low {cveCounts.Low} · Total{" "}
+                        {cveCounts.Total}
+                      </div>
                       <div className="graph-records">
-                        {cveFindings.map((row, idx) => (
+                        {visibleCveFindings.map((row, idx) => (
                           <div
                             key={`cve-${hoveredNode.key}-${idx}-${row.cve}`}
                             className="graph-record-row"
@@ -1708,7 +1721,9 @@ function DomainRelationshipGraph({ artifacts, maxLabelCap = 36 }) {
                             <span>
                               {row.cve} · {row.component} {row.version}
                             </span>
-                            <span className="muted">{row.severity}</span>
+                            <span className="muted">
+                              {classifySeverity(row.score)} · {row.score ?? "-"}
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -1845,6 +1860,10 @@ export default function App() {
       window.localStorage.getItem(UI_MODE_KEY) ||
       window.localStorage.getItem("asm.ui.mode");
     return normalizeUiMode(stored);
+  });
+  const [minCveSeverity, setMinCveSeverity] = useState(() => {
+    if (typeof window === "undefined") return "High";
+    return window.localStorage.getItem(MIN_CVE_SEVERITY_KEY) || "High";
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
@@ -2629,6 +2648,7 @@ export default function App() {
                     runningScan={runningScan}
                     scanProgress={scanProgress}
                     deepScan={deepScan}
+                    minCveSeverity={minCveSeverity}
                     onToggleDeepScan={(next) => {
                       setDeepScan(next);
                       window.localStorage.setItem("asm.scan.deep", String(next));
@@ -2720,6 +2740,7 @@ export default function App() {
                     runningScan={runningScan}
                     scanProgress={scanProgress}
                     deepScan={deepScan}
+                    minCveSeverity={minCveSeverity}
                     onToggleDeepScan={(next) => {
                       setDeepScan(next);
                       window.localStorage.setItem("asm.scan.deep", String(next));
@@ -3169,6 +3190,7 @@ export default function App() {
                         <DomainRelationshipGraph
                           artifacts={artifacts}
                           maxLabelCap={maxLabelCap}
+                          minCveSeverity={minCveSeverity}
                         />
                         {artifacts.change_summary?.has_previous ? (
                           <details className="graph-details">
@@ -3280,6 +3302,30 @@ export default function App() {
                   onChange={(e) => setMaxLabelCap(Number(e.target.value))}
                 />
               </label>
+            </div>
+            <div className="settings-row">
+              <div className="settings-toggle">
+                <div>
+                  <div className="settings-label">Minimum CVE Severity</div>
+                  <div className="muted">
+                    Only CVEs at or above this severity level will be displayed.
+                  </div>
+                </div>
+                <select
+                  value={minCveSeverity}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setMinCveSeverity(next);
+                    window.localStorage.setItem(MIN_CVE_SEVERITY_KEY, next);
+                  }}
+                >
+                  {["Critical", "High", "Medium", "Low"].map((level) => (
+                    <option key={level} value={level}>
+                      {level}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             {isAdmin ? (
               <div className="settings-row">

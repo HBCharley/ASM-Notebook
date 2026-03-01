@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { DrilldownModal, useDrilldown } from "../../lib/drilldown.jsx";
+import { countFindingsBySeverity, filterFindings } from "../../lib/cveSeverity.js";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -28,6 +29,7 @@ export default function SocDashboard({
   runningScan,
   scanProgress,
   deepScan,
+  minCveSeverity,
   onToggleDeepScan,
   onManageDetails,
   onLoadLatest,
@@ -59,13 +61,22 @@ export default function SocDashboard({
   const webHosts = intelDomains.filter(
     (row) => row?.web?.reachable || Number(row?.web?.status_code ?? 0) > 0
   ).length;
-  const criticalCves = intelDomains.reduce((sum, row) => {
-    const findings = row?.cve_findings || [];
-    return (
-      sum +
-      findings.filter((entry) => Number(entry?.score ?? 0) >= 9).length
-    );
-  }, 0);
+  const allCveFindings = useMemo(() => {
+    const items = [];
+    intelDomains.forEach((row) => {
+      (row?.cve_findings || []).forEach((entry) => items.push(entry));
+    });
+    return items;
+  }, [intelDomains]);
+  const visibleCveFindings = useMemo(
+    () => filterFindings(allCveFindings, minCveSeverity),
+    [allCveFindings, minCveSeverity]
+  );
+  const cveCounts = useMemo(
+    () => countFindingsBySeverity(visibleCveFindings),
+    [visibleCveFindings]
+  );
+  const criticalCves = cveCounts.Critical;
 
   const exposureScoreAvg = artifacts?.dns_intel?.summary?.exposure_score_avg;
   const exposureScoreFallback = intelDomains.length
@@ -283,17 +294,19 @@ export default function SocDashboard({
     };
   });
 
-  const vulnRows = intelDomains.map((row) => {
-    const findings = row?.cve_findings || [];
-    const top = findings[0] || {};
-    return {
-      host: row.domain || "domain",
-      component: top.component || "-",
-      version: top.version || "-",
-      cvss: top.score ?? "-",
-      count: findings.length,
-    };
-  });
+  const vulnRows = intelDomains
+    .map((row) => {
+      const findings = filterFindings(row?.cve_findings || [], minCveSeverity);
+      const top = findings[0] || {};
+      return {
+        host: row.domain || "domain",
+        component: top.component || "-",
+        version: top.version || "-",
+        cvss: top.score ?? "-",
+        count: findings.length,
+      };
+    })
+    .filter((row) => row.count > 0);
 
   const [scopeTab, setScopeTab] = useState("domains");
 
@@ -337,6 +350,7 @@ export default function SocDashboard({
     mailSummary,
     tlsSoonCount,
     riskCounts,
+    minCveSeverity,
   });
 
   const triageItems = [
@@ -468,6 +482,37 @@ export default function SocDashboard({
       </div>
 
       <div className="soc-grid">
+        <div className="soc-panel soc-cves">
+          <div className="soc-panel-header">
+            <h3>CVE Severity</h3>
+            <span className="soc-panel-meta">Min: {minCveSeverity}</span>
+            <button className="ghost" onClick={() => openDetail("vulnerabilities")}>
+              View details
+            </button>
+          </div>
+          <div className="soc-cve-grid">
+            <div className="soc-cve-card">
+              <div className="soc-cve-label">Critical</div>
+              <div className="soc-cve-value">{formatCount(cveCounts.Critical)}</div>
+            </div>
+            <div className="soc-cve-card">
+              <div className="soc-cve-label">High</div>
+              <div className="soc-cve-value">{formatCount(cveCounts.High)}</div>
+            </div>
+            <div className="soc-cve-card">
+              <div className="soc-cve-label">Medium</div>
+              <div className="soc-cve-value">{formatCount(cveCounts.Medium)}</div>
+            </div>
+            <div className="soc-cve-card">
+              <div className="soc-cve-label">Low</div>
+              <div className="soc-cve-value">{formatCount(cveCounts.Low)}</div>
+            </div>
+            <div className="soc-cve-card soc-cve-total">
+              <div className="soc-cve-label">Total</div>
+              <div className="soc-cve-value">{formatCount(cveCounts.Total)}</div>
+            </div>
+          </div>
+        </div>
         <div className="soc-panel soc-queue">
           <div className="soc-panel-header">
             <h3>Findings Queue</h3>
