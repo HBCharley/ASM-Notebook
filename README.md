@@ -145,7 +145,7 @@ Notes:
 Health check:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/health"
+Invoke-RestMethod "http://127.0.0.1:8000/v1/health"
 ```
 
 ## Demo Runbook
@@ -154,7 +154,7 @@ Local dev (Docker):
 
 1. `docker compose up --build`
 2. Verify health:
-   - `curl http://127.0.0.1:8000/health`
+   - `curl http://127.0.0.1:8000/v1/health`
 
 One-time migration flow:
 
@@ -166,7 +166,7 @@ One-time migration flow:
 
 API validation (curl):
 
-- `curl http://127.0.0.1:8000/health`
+- `curl http://127.0.0.1:8000/v1/health`
 - `curl http://127.0.0.1:8000/v1/companies`
 - `curl -X POST http://127.0.0.1:8000/v1/companies -H "Content-Type: application/json" -d "{\"slug\":\"example\",\"name\":\"Example Company\",\"domains\":[\"example.com\"]}"`
 - `curl -X POST http://127.0.0.1:8000/v1/companies/example/scans`
@@ -288,7 +288,7 @@ poetry run python -m asm_notebook.cli company delete testco --yes
 
 Health:
 
-- `GET /health`
+- `GET /v1/health`
 
 Companies:
 

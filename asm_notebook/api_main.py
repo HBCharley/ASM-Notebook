@@ -69,11 +69,6 @@ def _startup() -> None:
     init_db()
 
 
-@app.get("/health")
-def root_health() -> dict[str, bool]:
-    return {"ok": True}
-
-
 @router.get("/health")
 def health() -> dict[str, bool]:
     return {"ok": True}
