@@ -163,7 +163,7 @@ Notes:
 
 - The frontend uses a Vite proxy to the backend for API routes (`/v1` in `vite.config.js`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
-- API versioning: `/v1/*` routes are available; unversioned routes are not exposed.
+- API versioning: `/v1/*` routes are available.
 - Frontend can override the prefix with `VITE_API_PREFIX` (default `/v1`).
 
 ## Frontend UX

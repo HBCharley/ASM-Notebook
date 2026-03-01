@@ -10,7 +10,12 @@ from pydantic import BaseModel
 from .init_db import init_db
 from .services import company_service, scan_service
 
-app = FastAPI(title="ASM Notebook API")
+app = FastAPI(
+    title="ASM Notebook API",
+    docs_url="/v1/docs",
+    redoc_url="/v1/redoc",
+    openapi_url="/v1/openapi.json",
+)
 router = APIRouter()
 
 
