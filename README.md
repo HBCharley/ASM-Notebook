@@ -12,7 +12,7 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - FastAPI API
 - Typer CLI
 - SQLAlchemy ORM
-- SQLite (`asm_notebook.sqlite3`)
+- PostgreSQL (required at runtime)
 - Poetry or pip/venv for dependency management
 - Uvicorn for development server
 - React + Vite frontend (`frontend/`)
@@ -109,6 +109,7 @@ alembic upgrade head
 ## Run the API (Poetry)
 
 ```powershell
+$env:ASM_DATABASE_URL = "<your PostgreSQL URL>"
 poetry run uvicorn asm_notebook.api_main:app --reload
 ```
 
@@ -116,29 +117,32 @@ poetry run uvicorn asm_notebook.api_main:app --reload
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
+$env:ASM_DATABASE_URL = "<your PostgreSQL URL>"
 python -m uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### Run with Local PostgreSQL (Docker)
+## Docker Compose (PostgreSQL + API)
 
-Start local PostgreSQL:
+Create an env file:
 
 ```powershell
-Copy-Item .env.docker.example .env
-docker compose up -d postgres
+Copy-Item .env.example .env
 ```
 
-Run API locally against PostgreSQL:
+Build and start:
 
 ```powershell
-$env:ASM_DATABASE_URL = "postgresql+psycopg://asm:asm_dev_password@127.0.0.1:5432/asm_notebook"
-poetry run uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
+docker compose up --build
 ```
 
-Optional full Docker stack (PostgreSQL + API + Frontend):
+Notes:
+
+- Set `ASM_DATABASE_URL` in `.env` (no credentials are stored in the repo).
+
+Health check:
 
 ```powershell
-docker compose --profile full up --build
+Invoke-RestMethod "http://127.0.0.1:8000/health"
 ```
 
 Health check:
@@ -146,6 +150,45 @@ Health check:
 ```powershell
 Invoke-RestMethod "http://127.0.0.1:8000/health"
 ```
+
+## Demo Runbook
+
+Local dev (Docker):
+
+1. `docker compose up --build`
+2. Verify health:
+   - `curl http://127.0.0.1:8000/health`
+
+One-time migration flow:
+
+1. Start PostgreSQL only:
+   - `docker compose up -d db`
+2. Run the migration script:
+   - `python .\scripts\migrate_sqlite_to_postgres.py --sqlite sqlite:///path/to/asm_notebook.sqlite3 --postgres "<your PostgreSQL URL>" --yes-i-know-this-truncates`
+3. Verify row counts (script outputs table counts and asserts equality).
+
+API validation (curl):
+
+- `curl http://127.0.0.1:8000/health`
+- `curl http://127.0.0.1:8000/v1/companies`
+- `curl -X POST http://127.0.0.1:8000/v1/companies -H "Content-Type: application/json" -d "{\"slug\":\"example\",\"name\":\"Example Company\",\"domains\":[\"example.com\"]}"`
+- `curl -X POST http://127.0.0.1:8000/v1/companies/example/scans`
+
+## Deployment Notes (GCP Demo)
+
+Recommended: Cloud Run + Cloud SQL (PostgreSQL).
+
+Required env vars:
+
+- `ASM_DATABASE_URL` (PostgreSQL URL)
+- `ASM_CORS_ORIGINS` (comma-separated allowed origins)
+- `ASM_TEST_MODE` (optional, default `0`)
+
+Security notes:
+
+- Use least-privilege DB credentials.
+- Do not expose the database publicly.
+- If using Cloud SQL, connect via the Cloud SQL connector or private IP.
 
 ## Frontend
 
@@ -344,24 +387,25 @@ Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/by-number/1"
 
 ## Data & Storage
 
-- The app uses a local SQLite database (default: `asm_notebook.sqlite3` in the repo root).
-- Override DB file path with `ASM_DB_PATH` (useful for local tests/dev).
-- For cloud databases, set `ASM_DATABASE_URL` (takes precedence over `ASM_DB_PATH`).
-  - PostgreSQL example: `postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME`
-  - Legacy Heroku-style URLs (`postgres://...`) are auto-normalized at startup.
+- The app requires PostgreSQL at runtime.
+- Set `ASM_DATABASE_URL` to your PostgreSQL URL.
+- Legacy Heroku-style URLs (`postgres://...`) are auto-normalized at startup.
 - Local Dockerized PostgreSQL is available via `docker-compose.yml`.
 - Scan artifacts are stored as JSON in the database and can be exported via `scan export`.
 - The database file is intentionally excluded from Git.
 
-## Notes on SQLite Migration
+## One-Time Legacy DB -> PostgreSQL Migration
 
-Startup includes an automatic SQLite compatibility migration for older DB files:
+Use the migration script to move data from an existing legacy DB file into PostgreSQL:
 
-1. Adds `scan_runs.company_scan_number` if missing.
-2. Backfills values per company using `id` order.
-3. Ensures unique index on `(company_id, company_scan_number)`.
+```powershell
+python .\scripts\migrate_sqlite_to_postgres.py `
+  --sqlite sqlite:///path/to/asm_notebook.sqlite3 `
+  --postgres "<your PostgreSQL URL>" `
+  --yes-i-know-this-truncates
+```
 
-No manual migration step is required for this change.
+The script truncates destination tables and reloads all rows in dependency order.
 
 ## POC Closeout and Cloud Migration
 

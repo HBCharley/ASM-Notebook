@@ -1,12 +1,12 @@
 services:
-  postgres:
+  db:
     image: postgres:16-alpine
-    container_name: asm-postgres-local
+    container_name: asm-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-asm_notebook}
-      POSTGRES_USER: ${POSTGRES_USER:-asm}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-asm_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -16,24 +16,31 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    profiles:
-      - full
 
   api:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: asm-api-local
+    container_name: asm-api
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
     environment:
-      ASM_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-asm}:${POSTGRES_PASSWORD:-asm_dev_password}@postgres:5432/${POSTGRES_DB:-asm_notebook}
+      ASM_DATABASE_URL: ${ASM_DATABASE_URL}
+      ASM_CORS_ORIGINS: ${ASM_CORS_ORIGINS:-}
       ASM_TEST_MODE: ${ASM_TEST_MODE:-0}
     ports:
-      - "8000:8080"
-    profiles:
-      - full
+      - "8000:8000"
+    healthcheck:
+      test: [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   frontend:
     build:
@@ -41,13 +48,11 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://127.0.0.1:8000}
-    container_name: asm-frontend-local
+    container_name: asm-frontend
     depends_on:
       - api
     ports:
       - "5173:8080"
-    profiles:
-      - full
 
 volumes:
   postgres_data:

@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 def _cors_origins() -> list[str]:
-    raw = os.getenv("ASM_CORS_ALLOW_ORIGINS", "").strip()
+    raw = os.getenv("ASM_CORS_ORIGINS", "").strip()
     if raw:
         return [o.strip() for o in raw.split(",") if o.strip()]
     return [
@@ -61,6 +61,11 @@ class CompanyUpdate(BaseModel):
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+
+
+@app.get("/health")
+def root_health() -> dict[str, bool]:
+    return {"ok": True}
 
 
 @router.get("/health")

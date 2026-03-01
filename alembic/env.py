@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from asm_notebook.db import DATABASE_URL
-from asm_notebook.models import Base
-
 config = context.config
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+
+_url = os.getenv("ASM_DATABASE_URL", "").strip()
+if not _url:
+    _url = (config.get_main_option("sqlalchemy.url") or "").strip()
+if not _url:
+    raise RuntimeError("ASM_DATABASE_URL is required for Alembic migrations.")
+
+os.environ["ASM_DATABASE_URL"] = _url
+config.set_main_option("sqlalchemy.url", _url)
+
+from asm_notebook.models import Base  # noqa: E402
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

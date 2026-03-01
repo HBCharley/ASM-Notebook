@@ -4,8 +4,7 @@
 
 Backend:
 
-- `ASM_DB_PATH`: optional local SQLite override path.
-- `ASM_DATABASE_URL`: preferred DB connection URL (overrides `ASM_DB_PATH`), supports `sqlite:///...` and PostgreSQL.
+- `ASM_DATABASE_URL`: required DB connection URL (PostgreSQL).
 - `ASM_TEST_MODE`: set to `1` for deterministic test-mode scans.
 
 Frontend:
@@ -21,7 +20,7 @@ Cloud Build frontend substitution:
 ## Accepted POC Gaps
 
 - Scan execution remains in-process (FastAPI background task / CLI runtime), no durable queue yet.
-- Local-first behavior is still supported, including SQLite compatibility migration.
+- Runtime requires PostgreSQL; no local file-backed DB support.
 - API/CLI scan logic is not yet split into a service layer.
 
 ## Dependency Lock Status

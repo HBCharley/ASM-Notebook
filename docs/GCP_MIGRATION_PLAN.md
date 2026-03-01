@@ -1,6 +1,6 @@
 # GCP Migration Plan (ASM Notebook)
 
-This plan migrates the current local POC (FastAPI + React + SQLite) to a production-ready GCP baseline.
+This plan migrates the current local POC (FastAPI + React) to a production-ready GCP baseline using PostgreSQL.
 
 ## Recommended Target Architecture
 
@@ -35,12 +35,12 @@ This plan migrates the current local POC (FastAPI + React + SQLite) to a product
 3. Keep local dev compatibility (`.env.local` + existing commands).
 4. Preserve frontend view modes (Standard / Executive / SOC Analyst) across environments.
 
-## Phase 3: Database Migration (SQLite -> PostgreSQL)
+## Phase 3: Database Migration (PostgreSQL)
 
-1. Introduce database URL support that works for both SQLite and PostgreSQL.
+1. Ensure database URL support uses PostgreSQL only.
 2. Add migrations (Alembic recommended) for schema control.
 3. Provision Cloud SQL PostgreSQL instance and DB user.
-4. Run schema migration in `dev`, then data migration from local SQLite as needed.
+4. Run schema migration in `dev`, then data migration from a legacy DB as needed.
 5. Validate scan CRUD/artifact behavior parity against local baseline.
 
 ## Phase 4: Async Scan Execution Hardening
@@ -78,7 +78,7 @@ Current FastAPI background tasks are fine for local POC but not durable for clou
 ## Phase 7: Cutover Plan
 
 1. Freeze local writes.
-2. Final SQLite export/snapshot.
+2. Final legacy DB export/snapshot.
 3. Run final migration and smoke tests in GCP.
 4. Switch users to cloud URL.
 5. Monitor error rate, latency, and scan completion for 24-48 hours.
@@ -88,7 +88,7 @@ Current FastAPI background tasks are fine for local POC but not durable for clou
 - Cloud-hosted app serves frontend + API in target environment.
 - All scan endpoints return correct `status` and `notes`.
 - Async jobs survive restarts and retries.
-- PostgreSQL is source of truth (no local SQLite dependency in runtime).
+- PostgreSQL is source of truth (no local file-backed DB dependency in runtime).
 - CI/CD can redeploy reproducibly.
 
 ## Immediate Next Actions (Recommended Order)

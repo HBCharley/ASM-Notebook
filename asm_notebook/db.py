@@ -4,12 +4,7 @@ import os
 from typing import Any
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
-
-
-def _default_sqlite_url() -> str:
-    db_path = os.getenv("ASM_DB_PATH", "asm_notebook.sqlite3")
-    return f"sqlite:///{db_path}"
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 
 def _normalize_database_url(raw: str) -> str:
@@ -21,16 +16,23 @@ def _normalize_database_url(raw: str) -> str:
     return value
 
 
-DB_PATH = os.getenv("ASM_DB_PATH", "asm_notebook.sqlite3")
-DATABASE_URL = _normalize_database_url(os.getenv("ASM_DATABASE_URL", _default_sqlite_url()))
-IS_SQLITE = DATABASE_URL.startswith("sqlite://")
+_raw_url = os.getenv("ASM_DATABASE_URL", "").strip()
+if not _raw_url:
+    raise RuntimeError(
+        "ASM_DATABASE_URL is required and must point to PostgreSQL. "
+        "Example: postgresql+psycopg://USER:PASSWORD@HOST:5432/DBNAME"
+    )
+
+DATABASE_URL = _normalize_database_url(_raw_url)
+if not DATABASE_URL.startswith("postgresql+psycopg://"):
+    raise RuntimeError(
+        "ASM_DATABASE_URL must be a PostgreSQL URL using postgresql+psycopg://"
+    )
 
 _engine_kwargs: dict[str, Any] = {
     "future": True,
     "pool_pre_ping": True,
 }
-if IS_SQLITE:
-    _engine_kwargs["connect_args"] = {"check_same_thread": False}
 
 ENGINE = create_engine(DATABASE_URL, **_engine_kwargs)
 SessionLocal = sessionmaker(bind=ENGINE, autoflush=False, autocommit=False, future=True)
