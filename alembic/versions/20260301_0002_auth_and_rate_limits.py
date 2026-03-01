@@ -1,7 +1,7 @@
 """Add company ownership/visibility and scan rate limits.
 
 Revision ID: 20260301_0002
-Revises: 20260224_0001_baseline_schema
+Revises: 20260224_0001
 Create Date: 2026-03-01
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20260301_0002"
-down_revision = "20260224_0001_baseline_schema"
+down_revision = "20260224_0001"
 branch_labels = None
 depends_on = None
 
