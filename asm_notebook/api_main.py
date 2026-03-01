@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -23,9 +24,9 @@ logger = logging.getLogger("asm_notebook.auth")
 
 app = FastAPI(
     title="ASM Notebook API",
-    docs_url="/v1/docs",
-    redoc_url="/v1/redoc",
-    openapi_url="/v1/openapi.json",
+    docs_url="/api/v1/docs",
+    redoc_url="/api/v1/redoc",
+    openapi_url="/api/v1/openapi.json",
 )
 router = APIRouter()
 
@@ -423,4 +424,43 @@ def delete_company_scan(
     scan_service.delete_company_scan(slug, scan_id)
 
 
-app.include_router(router, prefix="/v1")
+app.include_router(router, prefix="/api/v1")
+
+
+def _resolve_dist_dir() -> Path | None:
+    env_override = os.getenv("ASM_FRONTEND_DIST", "").strip()
+    candidates: list[Path] = []
+    if env_override:
+        candidates.append(Path(env_override))
+    repo_root = Path(__file__).resolve().parent.parent
+    candidates.extend([repo_root / "dist", repo_root / "frontend" / "dist"])
+    for candidate in candidates:
+        if (candidate / "index.html").is_file():
+            return candidate
+    return None
+
+
+_DIST_DIR = _resolve_dist_dir()
+
+
+def _static_response(path: Path, cacheable: bool) -> FileResponse:
+    response = FileResponse(path)
+    if cacheable:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
+if _DIST_DIR:
+    @app.get("/", include_in_schema=False)
+    def _serve_index() -> FileResponse:
+        return FileResponse(_DIST_DIR / "index.html")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def _serve_spa(path: str) -> FileResponse:
+        if path == "health" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (_DIST_DIR / path).resolve()
+        if candidate.is_file() and str(candidate).startswith(str(_DIST_DIR.resolve())):
+            cacheable = path.startswith("assets/")
+            return _static_response(candidate, cacheable)
+        return FileResponse(_DIST_DIR / "index.html")

@@ -16,7 +16,7 @@ export default function ViewModeSwitcher({ value = "standard", onChange }) {
     <div className="view-switcher" role="radiogroup" aria-label="View mode">
       <div
         className="view-switcher-pill"
-        style={{ transform: `translateX(${index * 52}px)` }}
+        style={{ transform: `translateX(${index * 42}px)` }}
       />
       {MODES.map((mode) => {
         const Icon = mode.icon;
@@ -30,7 +30,7 @@ export default function ViewModeSwitcher({ value = "standard", onChange }) {
             aria-label={mode.label}
             aria-pressed={active}
           >
-            <Icon size={18} />
+            <Icon size={14} />
           </button>
         );
       })}

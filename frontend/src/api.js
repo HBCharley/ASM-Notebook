@@ -1,5 +1,5 @@
 const BASE = import.meta.env.VITE_API_BASE || "";
-const API_PREFIX = import.meta.env.VITE_API_PREFIX || "/v1";
+const API_PREFIX = import.meta.env.VITE_API_PREFIX || "/api/v1";
 const BASIC_USER = import.meta.env.VITE_BASIC_AUTH_USER || "";
 const BASIC_PASS = import.meta.env.VITE_BASIC_AUTH_PASS || "";
 const BASIC_AUTH_HEADER =

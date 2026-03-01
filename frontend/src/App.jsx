@@ -183,6 +183,51 @@ function ensureUniqueSlug(base, existingSlugs) {
   return `${base}-${n}`;
 }
 
+async function createCustomerFromHeader({
+  newCustomerName,
+  newCustomerDomain,
+  allCompanies,
+  activeUser,
+  groups,
+  companyGroups,
+  setStoredCompanyGroups,
+  setStoredGroups,
+  setNewCustomerName,
+  setNewCustomerDomain,
+  loadCompanies,
+  setSelectedCustomer,
+}) {
+  const name = newCustomerName.trim();
+  const domain = normalizeDomain(newCustomerDomain);
+  if (!name) throw new Error("Customer name is required");
+  if (!domain) throw new Error("Domain is required");
+  const customer = deriveCustomerFromDomain(domain);
+  const existingSlugs = new Set(
+    allCompanies.map((c) => (c.slug || "").toLowerCase())
+  );
+  const uniqueSlug = ensureUniqueSlug(customer.slugBase, existingSlugs);
+  const created = await api.createCompany({
+    slug: uniqueSlug,
+    name,
+    domains: [domain],
+  });
+  const assignedGroup =
+    activeUser?.role === "standard" && activeUser.groupId
+      ? activeUser.groupId
+      : groups[0] || "default";
+  setStoredCompanyGroups({
+    ...companyGroups,
+    [created.slug]: assignedGroup,
+  });
+  if (assignedGroup && !groups.includes(assignedGroup)) {
+    setStoredGroups([...groups, assignedGroup]);
+  }
+  setNewCustomerName("");
+  setNewCustomerDomain("");
+  await loadCompanies();
+  setSelectedCustomer(created.slug);
+}
+
 function isInRootScope(domain, root) {
   return domain === root || domain.endsWith(`.${root}`);
 }
@@ -1856,11 +1901,11 @@ export default function App() {
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(() => getThemeForUser(""));
   const [uiMode, setUiMode] = useState(() => {
-    if (typeof window === "undefined") return "standard";
+    if (typeof window === "undefined") return "executive";
     const stored =
       window.localStorage.getItem(UI_MODE_KEY) ||
       window.localStorage.getItem("asm.ui.mode");
-    return normalizeUiMode(stored);
+    return stored ? normalizeUiMode(stored) : "executive";
   });
   const [minCveSeverity, setMinCveSeverity] = useState(() => {
     if (typeof window === "undefined") return "High";
@@ -1994,26 +2039,41 @@ export default function App() {
   }, [authToken]);
 
   useEffect(() => {
-    if (!googleClientId) return;
-    if (!window.google?.accounts?.id) return;
-    window.google.accounts.id.initialize({
-      client_id: googleClientId,
-      callback: (resp) => {
-        if (resp?.credential) {
-          handleAuthToken(resp.credential);
+    if (!googleClientId || authToken) return;
+    let cancelled = false;
+    let attempts = 0;
+    const tryRender = () => {
+      if (cancelled) return;
+      if (!window.google?.accounts?.id) {
+        attempts += 1;
+        if (attempts < 20) {
+          setTimeout(tryRender, 250);
         }
-      },
-    });
-    if (googleButtonRef.current) {
-      googleButtonRef.current.innerHTML = "";
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: "outline",
-        size: "medium",
-        text: "signin_with",
-        width: 210,
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: (resp) => {
+          if (resp?.credential) {
+            handleAuthToken(resp.credential);
+          }
+        },
       });
-    }
-  }, [googleClientId]);
+      if (googleButtonRef.current) {
+        googleButtonRef.current.innerHTML = "";
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          theme: "outline",
+          size: "medium",
+          text: "signin_with",
+          width: 210,
+        });
+      }
+    };
+    tryRender();
+    return () => {
+      cancelled = true;
+    };
+  }, [googleClientId, authToken, settingsOpen]);
 
   const activeUser = useMemo(
     () => users.find((u) => u.id === activeUserId) || null,
@@ -2633,10 +2693,6 @@ export default function App() {
               ))}
             </select>
           </label>
-          <label className="header-label">
-            View:
-            <ViewModeSwitcher value={uiMode} onChange={persistUiMode} />
-          </label>
           {selectedCustomer === ADD_CUSTOMER_OPTION && canCreateCompany ? (
             <div className="header-create">
               <label>
@@ -2659,38 +2715,20 @@ export default function App() {
                 className="header-action"
                 onClick={() =>
                   runWithStatus(async () => {
-                    const name = newCustomerName.trim();
-                    const domain = normalizeDomain(newCustomerDomain);
-                    if (!name) throw new Error("Customer name is required");
-                    if (!domain) throw new Error("Domain is required");
-                    const customer = deriveCustomerFromDomain(domain);
-                    const existingSlugs = new Set(
-                      allCompanies.map((c) => (c.slug || "").toLowerCase())
-                    );
-                    const uniqueSlug = ensureUniqueSlug(
-                      customer.slugBase,
-                      existingSlugs
-                    );
-                    const created = await api.createCompany({
-                      slug: uniqueSlug,
-                      name,
-                      domains: [domain],
+                    await createCustomerFromHeader({
+                      newCustomerName,
+                      newCustomerDomain,
+                      allCompanies,
+                      activeUser,
+                      groups,
+                      companyGroups,
+                      setStoredCompanyGroups,
+                      setStoredGroups,
+                      setNewCustomerName,
+                      setNewCustomerDomain,
+                      loadCompanies,
+                      setSelectedCustomer,
                     });
-                    const assignedGroup =
-                      activeUser?.role === "standard" && activeUser.groupId
-                        ? activeUser.groupId
-                        : groups[0] || "default";
-                    setStoredCompanyGroups({
-                      ...companyGroups,
-                      [created.slug]: assignedGroup,
-                    });
-                    if (assignedGroup && !groups.includes(assignedGroup)) {
-                      setStoredGroups([...groups, assignedGroup]);
-                    }
-                    setNewCustomerName("");
-                    setNewCustomerDomain("");
-                    await loadCompanies();
-                    setSelectedCustomer(created.slug);
                   })
                 }
               >
@@ -2714,36 +2752,36 @@ export default function App() {
               Manage details
             </button>
           ) : null}
-          <div className="auth-controls">
-            {authToken ? (
-              <>
-                <div className="muted auth-meta">
-                  Signed in as {me.email || "user"}
-                </div>
-                <button className="ghost header-action" onClick={() => clearAuth()}>
-                  Sign out
-                </button>
-              </>
-            ) : googleClientId ? (
-              <div ref={googleButtonRef} />
-            ) : (
-              <div className="muted auth-meta">Google auth not configured</div>
-            )}
-          </div>
         </div>
         <div className="status">
           <div className="status-line">
             <button className="ghost" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
               ⚙
             </button>
+            <div className="status-view">
+              <ViewModeSwitcher value={uiMode} onChange={persistUiMode} />
+            </div>
             <span
               className={`dot ${isActive ? "active blink" : "idle"}`.trim()}
             />
-            {isActive ? "Activity" : "Idle"}
+            <span className="status-activity">
+              {isActive ? "Activity" : "Idle"}
+            </span>
           </div>
           <div className="status-user">
             <div className="muted user-meta">Role: {me.role}</div>
             {me.email ? <div className="muted user-meta">{me.email}</div> : null}
+            <div className="auth-controls auth-controls--status">
+              {authToken ? (
+                <button className="ghost header-action" onClick={() => clearAuth()}>
+                  Sign out
+                </button>
+              ) : googleClientId ? (
+                <div ref={googleButtonRef} />
+              ) : (
+                <div className="muted auth-meta">Google auth not configured</div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -3470,6 +3508,104 @@ export default function App() {
                 </select>
               </div>
             </div>
+            <div className="settings-row settings-row--mobile">
+              <div className="settings-toggle">
+                <div>
+                  <div className="settings-label">Account</div>
+                  <div className="muted">
+                    Role: {me.role}
+                    {me.email ? ` · ${me.email}` : ""}
+                  </div>
+                </div>
+                <div className="settings-actions">
+                  {authToken ? (
+                    <button className="ghost" onClick={() => clearAuth()}>
+                      Sign out
+                    </button>
+                  ) : googleClientId ? (
+                    <div ref={googleButtonRef} />
+                  ) : (
+                    <div className="muted auth-meta">Google auth not configured</div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="settings-row settings-row--mobile">
+              <div className="settings-toggle">
+                <div>
+                  <div className="settings-label">Actions</div>
+                  <div className="muted">Quick access to common tasks.</div>
+                </div>
+                <div className="settings-actions">
+                  <button
+                    className="ghost"
+                    onClick={() => runWithStatus(loadCompanies)}
+                  >
+                    Refresh
+                  </button>
+                  {activeCompany ? (
+                    <button
+                      className="ghost"
+                      onClick={() => setCustomerModalOpen(true)}
+                      disabled={!canManageActiveCompany}
+                      title={canManageActiveCompany ? "Manage details" : "Read-only access"}
+                    >
+                      Manage details
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            {canCreateCompany ? (
+              <div className="settings-row settings-row--mobile">
+                <div className="settings-toggle">
+                  <div>
+                    <div className="settings-label">Create customer</div>
+                    <div className="muted">Add a new customer from mobile.</div>
+                  </div>
+                </div>
+                <div className="settings-actions">
+                  <label>
+                    Name
+                    <input
+                      value={newCustomerName}
+                      onChange={(e) => setNewCustomerName(e.target.value)}
+                      placeholder="Acme Corp"
+                    />
+                  </label>
+                  <label>
+                    Domain
+                    <input
+                      value={newCustomerDomain}
+                      onChange={(e) => setNewCustomerDomain(e.target.value)}
+                      placeholder="example.com"
+                    />
+                  </label>
+                  <button
+                    onClick={() =>
+                      runWithStatus(async () => {
+                        await createCustomerFromHeader({
+                          newCustomerName,
+                          newCustomerDomain,
+                          allCompanies,
+                          activeUser,
+                          groups,
+                          companyGroups,
+                          setStoredCompanyGroups,
+                          setStoredGroups,
+                          setNewCustomerName,
+                          setNewCustomerDomain,
+                          loadCompanies,
+                          setSelectedCustomer,
+                        });
+                      })
+                    }
+                  >
+                    Create
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {isAdmin ? (
               <div className="settings-row">
                 <div className="panel-header">

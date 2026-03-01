@@ -17,11 +17,15 @@ services:
       timeout: 5s
       retries: 20
 
-  api:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: asm-api
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_API_PREFIX: ${VITE_API_PREFIX:-/api/v1}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+    container_name: asm-app
     depends_on:
       db:
         condition: service_healthy
@@ -38,7 +42,7 @@ services:
       USER_SCAN_COOLDOWN_SECONDS: ${USER_SCAN_COOLDOWN_SECONDS:-1800}
       USER_SCANS_PER_HOUR: ${USER_SCANS_PER_HOUR:-2}
     ports:
-      - "8000:8000"
+      - "8080:8080"
     volumes:
       - cve_cache:/app/asm_notebook/data/nvd
     healthcheck:
@@ -46,24 +50,11 @@ services:
         "CMD",
         "python",
         "-c",
-        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=3)"
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=3)"
       ]
       interval: 10s
       timeout: 5s
       retries: 10
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        VITE_API_BASE: ${VITE_API_BASE:-http://127.0.0.1:8000}
-        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
-    container_name: asm-frontend
-    depends_on:
-      - api
-    ports:
-      - "5173:8080"
 
 volumes:
   postgres_data:

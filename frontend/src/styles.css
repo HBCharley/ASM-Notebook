@@ -124,6 +124,28 @@ body {
   font-size: 12px;
 }
 
+.auth-controls--status {
+  justify-content: flex-end;
+}
+
+.settings-row--mobile {
+  display: none;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-actions label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 160px;
+}
+
 .public-banner {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
   border-bottom: 1px solid var(--line);
@@ -146,19 +168,19 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px;
+  padding: 3px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--line) 90%, transparent);
   background: color-mix(in srgb, var(--card) 70%, #0f1115);
-  width: calc(48px * 3 + 8px);
+  width: calc(38px * 3 + 8px);
 }
 
 .view-switcher-pill {
   position: absolute;
-  left: 10px;
-  top: 4px;
-  width: 36px;
-  height: 36px;
+  left: 8px;
+  top: 3px;
+  width: 29px;
+  height: 29px;
   border-radius: 999px;
   background: linear-gradient(90deg, #dc2626, #f97316);
   box-shadow: 0 12px 24px rgba(239, 68, 68, 0.25);
@@ -168,8 +190,8 @@ body {
 
 .view-switcher-btn {
   position: relative;
-  width: 48px;
-  height: 36px;
+  width: 38px;
+  height: 29px;
   display: grid;
   place-items: center;
   border-radius: 999px;
@@ -225,6 +247,15 @@ body {
   gap: 8px;
 }
 
+.status-view {
+  display: flex;
+  align-items: center;
+}
+
+.status-activity {
+  display: inline-flex;
+}
+
 .status-user {
   display: flex;
   flex-direction: column;
@@ -251,6 +282,42 @@ body {
   border-radius: 50%;
   background: var(--accent-2);
   display: inline-block;
+}
+
+@media (max-width: 920px) {
+  .brand-sub {
+    display: none;
+  }
+
+  .header-controls {
+    flex: 1;
+    justify-content: flex-start;
+    min-width: 0;
+    gap: 8px;
+  }
+
+  .header-controls .header-create,
+  .header-controls .header-action {
+    display: none;
+  }
+
+  .status-user,
+  .status-activity,
+  .auth-controls--status {
+    display: none;
+  }
+
+  .settings-row--mobile {
+    display: block;
+  }
+
+  .settings-actions {
+    width: 100%;
+  }
+
+  .settings-actions label {
+    min-width: 100%;
+  }
 }
 
 .dot.idle {

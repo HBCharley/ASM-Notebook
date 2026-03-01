@@ -21,7 +21,7 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 
 - Canonical backend implementation lives in `asm_notebook/`.
 - Root-level files (`api_main.py`, `models.py`, `db.py`, `init_db.py`, `cli.py`) are compatibility shims that re-export from `asm_notebook/*`.
-- API routing/validation lives in `asm_notebook/api_main.py` under `/v1`.
+- API routing/validation lives in `asm_notebook/api_main.py` under `/api/v1`.
 - Service-layer logic lives in `asm_notebook/services/` (`scan_service.py`, `company_service.py`).
 
 ## Core Principles
@@ -41,7 +41,7 @@ This project intentionally avoids invasive probing and focuses on publicly avail
   - `ADMIN_EMAILS` = full access (rate-limited).
   - `USER_EMAILS` = limited access (owned companies only, max 3, strict scan limits).
 
-Use `GET /v1/me` to see the effective role and limits.
+Use `GET /api/v1/me` to see the effective role and limits.
 
 ## CVE Data
 
@@ -52,7 +52,7 @@ Use `GET /v1/me` to see the effective role and limits.
 - `ASM_NVD_DISABLE=1` to skip CVE lookups
 - Cache warm-up: run any scan once (or hit any scan endpoint that returns artifacts) to trigger the initial NVD download.
 - Debug CVE cache status:
-  - `GET /v1/debug/cve`
+  - `GET /api/v1/debug/cve`
   - `poetry run python -m asm_notebook.cli cve status --keyword nginx --keyword apache --keyword wordpress`
 
 ## ASN Lookups
@@ -134,7 +134,7 @@ $env:ASM_DATABASE_URL = "<your PostgreSQL URL>"
 python -m uvicorn asm_notebook.api_main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## Docker Compose (PostgreSQL + API)
+## Docker Compose (All-in-one Demo)
 
 Create an env file:
 
@@ -155,8 +155,12 @@ Notes:
 Health check:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/v1/health"
+Invoke-RestMethod "http://127.0.0.1:8080/api/v1/health"
 ```
+
+UI:
+
+- `http://127.0.0.1:8080/`
 
 ## Demo Runbook
 
@@ -164,23 +168,23 @@ Local dev (Docker):
 
 1. `docker compose up --build`
 2. Verify health:
-   - `curl http://127.0.0.1:8000/v1/health`
+   - `curl http://127.0.0.1:8080/api/v1/health`
 
 API validation (curl):
 
-- `curl http://127.0.0.1:8000/v1/health`
-- `curl http://127.0.0.1:8000/v1/companies`
-- `curl -X POST http://127.0.0.1:8000/v1/companies -H "Content-Type: application/json" -d "{\"slug\":\"example\",\"name\":\"Example Company\",\"domains\":[\"example.com\"]}"`
-- `curl -X POST http://127.0.0.1:8000/v1/companies/example/scans`
+- `curl http://127.0.0.1:8080/api/v1/health`
+- `curl http://127.0.0.1:8080/api/v1/companies`
+- `curl -X POST http://127.0.0.1:8080/api/v1/companies -H "Content-Type: application/json" -d "{\"slug\":\"example\",\"name\":\"Example Company\",\"domains\":[\"example.com\"]}"`
+- `curl -X POST http://127.0.0.1:8080/api/v1/companies/example/scans`
 
-## Deployment Notes (GCP Demo)
+## Cloud Run (All-in-one Demo)
 
-Recommended: Cloud Run + Cloud SQL (PostgreSQL).
+Target: one Cloud Run service serving UI at `/` and API at `/api/v1`.
 
 Required env vars:
 
-- `ASM_DATABASE_URL` (PostgreSQL URL)
-- `ASM_CORS_ORIGINS` (comma-separated allowed origins)
+- `ASM_DATABASE_URL` (PostgreSQL URL, include `sslmode=require`)
+- `ASM_CORS_ORIGINS` (comma-separated allowed origins, default to `https://asm.cthomas.net` for the demo)
 - `ASM_TEST_MODE` (optional, default `0`)
 - `GOOGLE_OAUTH_CLIENT_ID` (Google OAuth client ID for ID token verification)
 - `ADMIN_EMAILS` (comma-separated)
@@ -189,11 +193,49 @@ Required env vars:
 - `ADMIN_SCAN_COOLDOWN_SECONDS` / `ADMIN_SCANS_PER_HOUR`
 - `USER_SCAN_COOLDOWN_SECONDS` / `USER_SCANS_PER_HOUR`
 
+Build and deploy (example region `us-central1`):
+
+```powershell
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
+gcloud artifacts repositories create asm-notebook --repository-format=docker --location=us-central1
+gcloud builds submit --tag us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest
+gcloud run deploy asm-notebook `
+  --image us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest `
+  --region us-central1 `
+  --platform managed `
+  --allow-unauthenticated `
+  --set-env-vars ASM_DATABASE_URL="<neon-connection-string>",ASM_CORS_ORIGINS="https://asm.cthomas.net",GOOGLE_OAUTH_CLIENT_ID="<client-id>",ADMIN_EMAILS="<admin1,admin2>",USER_EMAILS="<user1,user2>",PUBLIC_COMPANY_SLUGS="company-a,company-b"
+```
+
+If you need to bake a Google client ID into the UI, build and push with Docker (build args are required for Vite):
+
+```powershell
+gcloud auth configure-docker us-central1-docker.pkg.dev
+docker build -t us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest `
+  --build-arg VITE_GOOGLE_CLIENT_ID="<client-id>" `
+  --build-arg VITE_API_PREFIX="/api/v1" `
+  .
+docker push us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest
+```
+
+Domain mapping (high-level):
+
+```powershell
+gcloud run domain-mappings create --service asm-notebook --domain asm.cthomas.net --region us-central1
+```
+
 Security notes:
 
 - Use least-privilege DB credentials.
 - Do not expose the database publicly.
-- If using Cloud SQL, connect via the Cloud SQL connector or private IP.
+
+## Neon Postgres (Demo)
+
+1. Create a Neon project and database.
+2. Copy the connection string and ensure it includes `sslmode=require`.
+3. Set `ASM_DATABASE_URL` to that value.
+
+Note: Neon sleeps inactive databases; the first request after idle may be slower.
 
 ## Frontend
 
@@ -209,10 +251,10 @@ Open:
 
 Notes:
 
-- The frontend uses a Vite proxy to the backend for API routes (`/v1` in `vite.config.js`).
+- The frontend uses a Vite proxy to the backend for API routes (`/api/v1` in `vite.config.js`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
-- API versioning: `/v1/*` routes are available.
-- Frontend can override the prefix with `VITE_API_PREFIX` (default `/v1`).
+- API versioning: `/api/v1/*` routes are available.
+- Frontend can override the prefix with `VITE_API_PREFIX` (default `/api/v1`).
 - Google login uses `VITE_GOOGLE_CLIENT_ID` (must match backend `GOOGLE_OAUTH_CLIENT_ID`).
 
 ## Frontend UX
@@ -297,34 +339,41 @@ poetry run python -m asm_notebook.cli company delete testco --yes
 
 Health:
 
-- `GET /v1/health`
-- `GET /v1/me`
+- `GET /api/v1/health`
+- `GET /api/v1/me`
+
+Swagger UI:
+
+- `GET /api/v1/docs`
 
 Companies:
 
-- `POST /v1/companies`
-- `GET /v1/companies`
-- `GET /v1/companies/{slug}`
-- `PUT /v1/companies/{slug}/domains`
-- `PATCH /v1/companies/{slug}`
-- `DELETE /v1/companies/{slug}`
+- `POST /api/v1/companies`
+- `GET /api/v1/companies`
+- `GET /api/v1/companies/{slug}`
+- `PUT /api/v1/companies/{slug}/domains`
+- `PATCH /api/v1/companies/{slug}`
+- `DELETE /api/v1/companies/{slug}`
 
 Scans (company-scoped and hardened):
 
-- `POST /v1/companies/{slug}/scans`
-- `GET /v1/companies/{slug}/scans`
-- `GET /v1/companies/{slug}/scans/latest`
-- `GET /v1/companies/{slug}/scans/{scan_id}`
-- `GET /v1/companies/{slug}/scans/{scan_id}/artifacts`
-- `GET /v1/companies/{slug}/scans/by-number/{company_scan_number}`
-- `DELETE /v1/companies/{slug}/scans/{scan_id}`
+- `POST /api/v1/companies/{slug}/scans`
+- `GET /api/v1/companies/{slug}/scans`
+- `GET /api/v1/companies/{slug}/scans/latest`
+- `GET /api/v1/companies/{slug}/scans/{scan_id}`
+- `GET /api/v1/companies/{slug}/scans/{scan_id}/artifacts`
+- `GET /api/v1/companies/{slug}/scans/by-number/{company_scan_number}`
+- `DELETE /api/v1/companies/{slug}/scans/{scan_id}`
 
 ### API Examples
+
+Examples below assume the Docker Compose demo (`http://127.0.0.1:8080`). If you are running
+`uvicorn` directly, use `http://127.0.0.1:8000` instead.
 
 Create a company:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/companies" -ContentType "application/json" -Body '{
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v1/companies" -ContentType "application/json" -Body '{
   "slug": "example",
   "name": "Example Company",
   "domains": ["example.com"]
@@ -334,7 +383,7 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/companies" -Conten
 Trigger a scan:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/v1/companies/example/scans"
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8080/api/v1/companies/example/scans"
 ```
 
 The scan trigger returns immediately with a running scan record, for example:
@@ -351,26 +400,26 @@ The scan trigger returns immediately with a running scan record, for example:
 List scans:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://127.0.0.1:8080/api/v1/companies/example/scans" | ConvertTo-Json -Depth 5
 ```
 
 Fetch artifacts:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/1/artifacts" | ConvertTo-Json -Depth 8
+Invoke-RestMethod "http://127.0.0.1:8080/api/v1/companies/example/scans/1/artifacts" | ConvertTo-Json -Depth 8
 ```
 
 Fetch by per-company scan number:
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/by-number/1"
+Invoke-RestMethod "http://127.0.0.1:8080/api/v1/companies/example/scans/by-number/1"
 ```
 
 ## Scan Execution Flow
 
 ### Standard Scan (Deep Scan off)
 
-1. `POST /v1/companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
+1. `POST /api/v1/companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
 2. Collect subdomains via Certificate Transparency (`crt.sh`).
 3. Scope-filter against root domains.
 4. Passive DNS resolution (A/AAAA/CNAME/MX/NS/TXT/CAA).
@@ -409,11 +458,11 @@ Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/by-number/1"
 - Operational handoff notes: `docs/OPERATIONAL_HANDOFF_NOTES.md`
 - GCP migration plan: `docs/GCP_MIGRATION_PLAN.md`
 
-## GCP Deployment Baseline
+## Legacy Separate Services (Optional)
 
-Container assets included:
+If you still want separate backend/frontend services:
 
-- Backend image: `Dockerfile`
+- Backend image: `Dockerfile` (all-in-one by default)
 - Frontend image: `frontend/Dockerfile` (+ SPA nginx config in `frontend/nginx.conf`)
 - Cloud Build pipelines:
   - `dev-api.yaml`
