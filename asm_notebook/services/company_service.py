@@ -19,7 +19,13 @@ def _company_by_slug(session: SessionLocal, slug: str) -> Company | None:
     ).scalar_one_or_none()
 
 
-def create_company(slug: str, name: str, domains: list[str]) -> dict[str, Any]:
+def create_company(
+    slug: str,
+    name: str,
+    domains: list[str],
+    owner_email: str | None = None,
+    visibility: str = "private",
+) -> dict[str, Any]:
     slug = slug.strip()
     name = name.strip()
     clean_domains = [normalize_domain(d) for d in domains if d and d.strip()]
@@ -34,7 +40,9 @@ def create_company(slug: str, name: str, domains: list[str]) -> dict[str, Any]:
         if existing:
             raise HTTPException(status_code=409, detail="Company slug already exists")
 
-        company = Company(slug=slug, name=name)
+        company = Company(
+            slug=slug, name=name, owner_email=owner_email, visibility=visibility
+        )
         session.add(company)
         session.flush()
         for domain in clean_domains:
@@ -45,6 +53,8 @@ def create_company(slug: str, name: str, domains: list[str]) -> dict[str, Any]:
             "slug": company.slug,
             "name": company.name,
             "domains": clean_domains,
+            "owner_email": company.owner_email,
+            "visibility": company.visibility,
         }
 
 
@@ -59,6 +69,8 @@ def list_companies() -> list[dict[str, Any]]:
                 "slug": company.slug,
                 "name": company.name,
                 "domains": [d.domain for d in company.domains],
+                "owner_email": company.owner_email,
+                "visibility": company.visibility,
             }
             for company in companies
         ]
@@ -74,6 +86,8 @@ def get_company(slug: str) -> dict[str, Any]:
             "slug": company.slug,
             "name": company.name,
             "domains": [d.domain for d in company.domains],
+            "owner_email": company.owner_email,
+            "visibility": company.visibility,
         }
 
 
@@ -93,6 +107,8 @@ def update_company(slug: str, name: str) -> dict[str, Any]:
             "slug": company.slug,
             "name": company.name,
             "domains": [d.domain for d in company.domains],
+            "owner_email": company.owner_email,
+            "visibility": company.visibility,
         }
 
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "./api.js";
+import { api, setAuthToken } from "./api.js";
 import logoLight from "./assets/logo-light.png";
 import logoDark from "./assets/logo-dark.png";
 import ExecutiveDashboard from "./components/dashboard/ExecutiveDashboard.jsx";
@@ -20,6 +20,7 @@ const USER_THEME_KEY = "asm.user.theme";
 const UI_MODE_KEY = "asm_ui_mode";
 const NEW_GROUP_OPTION = "__new_group__";
 const MIN_CVE_SEVERITY_KEY = "asm_settings_min_cve_severity";
+const AUTH_TOKEN_KEY = "asm_auth_id_token";
 
 function readStoredJson(key, fallback) {
   if (typeof window === "undefined") return fallback;
@@ -1865,6 +1866,21 @@ export default function App() {
     if (typeof window === "undefined") return "High";
     return window.localStorage.getItem(MIN_CVE_SEVERITY_KEY) || "High";
   });
+  const [authToken, setAuthTokenState] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
+  });
+  const [me, setMe] = useState(() => ({
+    role: "public",
+    email: null,
+    allowed_company_slugs: [],
+    public_company_slugs: [],
+    max_companies: 0,
+    owned_company_count: 0,
+    scan_limits: { cooldown_seconds: 0, scans_per_hour: 0 },
+  }));
+  const [authReady, setAuthReady] = useState(false);
+  const googleButtonRef = useRef(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -1932,23 +1948,108 @@ export default function App() {
   const userModalDragRef = useRef({ x: 0, y: 0 });
   const userModalResizeRef = useRef({ x: 0, y: 0, width: 0, height: 0 });
 
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+
+  function handleAuthToken(token) {
+    const next = token || "";
+    setAuthTokenState(next);
+    if (typeof window !== "undefined") {
+      if (next) {
+        window.localStorage.setItem(AUTH_TOKEN_KEY, next);
+      } else {
+        window.localStorage.removeItem(AUTH_TOKEN_KEY);
+      }
+    }
+  }
+
+  function clearAuth(message) {
+    handleAuthToken("");
+    if (message) {
+      setError(message);
+    }
+  }
+
+  async function loadMe() {
+    try {
+      const data = await api.getMe();
+      setMe(data);
+    } catch (err) {
+      if (err?.status === 401) {
+        clearAuth("Session expired. Please sign in again.");
+      }
+      setMe((prev) => ({
+        ...prev,
+        role: "public",
+        allowed_company_slugs: prev.public_company_slugs || [],
+      }));
+    } finally {
+      setAuthReady(true);
+    }
+  }
+
+  useEffect(() => {
+    setAuthToken(authToken);
+    setAuthReady(false);
+    loadMe();
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!googleClientId) return;
+    if (!window.google?.accounts?.id) return;
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: (resp) => {
+        if (resp?.credential) {
+          handleAuthToken(resp.credential);
+        }
+      },
+    });
+    if (googleButtonRef.current) {
+      googleButtonRef.current.innerHTML = "";
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: "outline",
+        size: "medium",
+        text: "signin_with",
+        width: 210,
+      });
+    }
+  }, [googleClientId]);
+
   const activeUser = useMemo(
     () => users.find((u) => u.id === activeUserId) || null,
     [users, activeUserId]
   );
-  const isAdmin = activeUser?.role === "admin";
+  const isAdmin = me.role === "admin";
+  const publicSlugs = useMemo(
+    () => new Set(me.public_company_slugs || []),
+    [me.public_company_slugs]
+  );
+  const allowedSlugs = useMemo(
+    () => new Set(me.allowed_company_slugs || []),
+    [me.allowed_company_slugs]
+  );
   const companies = useMemo(() => {
-    if (!activeUser || activeUser.role === "admin") {
+    if (me.role === "admin") {
       return allCompanies;
     }
-    return allCompanies.filter(
-      (company) => companyGroups[company.slug] === activeUser.groupId
-    );
-  }, [allCompanies, activeUser, companyGroups]);
+    return allCompanies.filter((company) => allowedSlugs.has(company.slug));
+  }, [allCompanies, allowedSlugs, me.role]);
   const activeScan = useMemo(
     () => scans.find((s) => s.id === selectedScanId),
     [scans, selectedScanId]
   );
+  const ownedCompanyCount = useMemo(
+    () => companies.filter((c) => !publicSlugs.has(c.slug)).length,
+    [companies, publicSlugs]
+  );
+  const canCreateCompany =
+    me.role === "admin" ||
+    (me.role === "user" && ownedCompanyCount < (me.max_companies || 0));
+  const canManageActiveCompany =
+    me.role === "admin" ||
+    (me.role === "user" && activeCompany?.owner_email === me.email);
+  const canScanActiveCompany = canManageActiveCompany;
+  const canDeleteScan = canManageActiveCompany;
   const hasRunningScan = useMemo(
     () => scans.some((s) => s.status === "running"),
     [scans]
@@ -2039,6 +2140,9 @@ export default function App() {
     if (scanBlocked) {
       throw new Error("A scan is already running. Wait for it to finish.");
     }
+    if (!canScanActiveCompany) {
+      throw new Error("Scan not permitted for this company.");
+    }
     setScanInFlight(true);
     try {
       const result = await api.runScan(slug, {
@@ -2068,6 +2172,10 @@ export default function App() {
   }
 
   async function handleSelectCustomer(option) {
+    if (option === ADD_CUSTOMER_OPTION && !canCreateCompany) {
+      setError("Company creation is not available for this account.");
+      return;
+    }
     setSelectedCustomer(option);
     setSelectedScanId(null);
     setArtifacts(null);
@@ -2079,7 +2187,20 @@ export default function App() {
     try {
       await fn();
     } catch (err) {
-      setError(err.message || "Request failed");
+      if (err?.status === 401) {
+        clearAuth("Session expired. Please sign in again.");
+      } else if (err?.status === 429 && err?.data?.retry_after_seconds) {
+        const retry = Number(err.data.retry_after_seconds);
+        const seconds = Number.isFinite(retry) ? retry : 60;
+        const minutes = Math.ceil(seconds / 60);
+        setError(
+          `Rate limited. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`
+        );
+      } else if (err?.data?.message) {
+        setError(err.data.message);
+      } else {
+        setError(err.message || "Request failed");
+      }
     } finally {
       setLoading(false);
     }
@@ -2321,8 +2442,9 @@ export default function App() {
 
 
   useEffect(() => {
+    if (!authReady) return;
     runWithStatus(loadCompanies);
-  }, []);
+  }, [authReady, me.role, me.email]);
 
   useEffect(() => {
     if (!groups.length) {
@@ -2344,17 +2466,23 @@ export default function App() {
   }, [groups, newUserGroupChoice]);
 
   useEffect(() => {
-    if (
-      selectedCustomer !== ADD_CUSTOMER_OPTION &&
-      !companies.some((c) => c.slug === selectedCustomer)
-    ) {
-      setSelectedCustomer(ADD_CUSTOMER_OPTION);
-      setActiveCompany(null);
-      setScans([]);
-      setSelectedScanId(null);
-      setArtifacts(null);
+    if (selectedCustomer !== ADD_CUSTOMER_OPTION) {
+      if (!companies.some((c) => c.slug === selectedCustomer)) {
+        const fallback = canCreateCompany
+          ? ADD_CUSTOMER_OPTION
+          : companies[0]?.slug || ADD_CUSTOMER_OPTION;
+        setSelectedCustomer(fallback);
+        setActiveCompany(null);
+        setScans([]);
+        setSelectedScanId(null);
+        setArtifacts(null);
+      }
+      return;
     }
-  }, [companies, selectedCustomer]);
+    if (!canCreateCompany && companies.length) {
+      setSelectedCustomer(companies[0].slug);
+    }
+  }, [companies, selectedCustomer, canCreateCompany]);
 
   useEffect(() => {
     if (!userModalOpen) return;
@@ -2495,7 +2623,9 @@ export default function App() {
               value={selectedCustomer}
               onChange={(e) => handleSelectCustomer(e.target.value)}
             >
-              <option value={ADD_CUSTOMER_OPTION}>Add Customer</option>
+              {canCreateCompany ? (
+                <option value={ADD_CUSTOMER_OPTION}>Add Customer</option>
+              ) : null}
               {companies.map((c) => (
                 <option key={c.slug} value={c.slug}>
                   {c.name} ({c.slug})
@@ -2507,7 +2637,7 @@ export default function App() {
             View:
             <ViewModeSwitcher value={uiMode} onChange={persistUiMode} />
           </label>
-          {selectedCustomer === ADD_CUSTOMER_OPTION ? (
+          {selectedCustomer === ADD_CUSTOMER_OPTION && canCreateCompany ? (
             <div className="header-create">
               <label>
                 Name
@@ -2575,10 +2705,31 @@ export default function App() {
             Refresh
           </button>
           {activeCompany ? (
-            <button className="ghost header-action" onClick={() => setCustomerModalOpen(true)}>
+            <button
+              className="ghost header-action"
+              onClick={() => setCustomerModalOpen(true)}
+              disabled={!canManageActiveCompany}
+              title={canManageActiveCompany ? "Manage details" : "Read-only access"}
+            >
               Manage details
             </button>
           ) : null}
+          <div className="auth-controls">
+            {authToken ? (
+              <>
+                <div className="muted auth-meta">
+                  Signed in as {me.email || "user"}
+                </div>
+                <button className="ghost header-action" onClick={() => clearAuth()}>
+                  Sign out
+                </button>
+              </>
+            ) : googleClientId ? (
+              <div ref={googleButtonRef} />
+            ) : (
+              <div className="muted auth-meta">Google auth not configured</div>
+            )}
+          </div>
         </div>
         <div className="status">
           <div className="status-line">
@@ -2591,33 +2742,16 @@ export default function App() {
             {isActive ? "Activity" : "Idle"}
           </div>
           <div className="status-user">
-            {activeUser ? (
-              <>
-                <button
-                  className="ghost user-chip"
-                  onClick={() => setUserModalOpen(true)}
-                  type="button"
-                >
-                  User: {activeUser.username}
-                </button>
-                <div className="muted user-meta">
-                  {activeUser.role === "admin"
-                    ? "Admin user"
-                    : `Group ${activeUser.groupId || "-"}`}
-                </div>
-              </>
-            ) : (
-              <button
-                className="ghost user-chip"
-                onClick={() => setUserModalOpen(true)}
-                type="button"
-              >
-                User: Login
-              </button>
-            )}
+            <div className="muted user-meta">Role: {me.role}</div>
+            {me.email ? <div className="muted user-meta">{me.email}</div> : null}
           </div>
         </div>
       </header>
+      {me.role === "public" ? (
+        <div className="public-banner">
+          Public demo (read-only). Sign in for more access.
+        </div>
+      ) : null}
 
       <div className="layout">
         <main className="content">
@@ -2649,6 +2783,9 @@ export default function App() {
                     scanProgress={scanProgress}
                     deepScan={deepScan}
                     minCveSeverity={minCveSeverity}
+                    canManageCompany={canManageActiveCompany}
+                    canStartScan={canScanActiveCompany}
+                    canDeleteScan={canDeleteScan}
                     onToggleDeepScan={(next) => {
                       setDeepScan(next);
                       window.localStorage.setItem("asm.scan.deep", String(next));
@@ -2741,6 +2878,9 @@ export default function App() {
                     scanProgress={scanProgress}
                     deepScan={deepScan}
                     minCveSeverity={minCveSeverity}
+                    canManageCompany={canManageActiveCompany}
+                    canStartScan={canScanActiveCompany}
+                    canDeleteScan={canDeleteScan}
                     onToggleDeepScan={(next) => {
                       setDeepScan(next);
                       window.localStorage.setItem("asm.scan.deep", String(next));
@@ -2850,11 +2990,12 @@ export default function App() {
                     <button
                       className="ghost"
                       onClick={() => setCustomerModalOpen(true)}
+                      disabled={!canManageActiveCompany}
                     >
                       Manage details
                     </button>
                     <button
-                      disabled={scanBlocked}
+                      disabled={scanBlocked || !canScanActiveCompany}
                       onClick={() =>
                         runWithStatus(async () => {
                           await startScan(activeCompany.slug);
@@ -2865,6 +3006,7 @@ export default function App() {
                     </button>
                     <button
                       className="danger"
+                      disabled={!canManageActiveCompany}
                       onClick={() =>
                         runWithStatus(async () => {
                           if (
@@ -2988,7 +3130,7 @@ export default function App() {
                         <div className="empty empty-with-action">
                           <span>No scans yet</span>
                           <button
-                            disabled={scanBlocked}
+                            disabled={scanBlocked || !canScanActiveCompany}
                             onClick={() =>
                               runWithStatus(async () => {
                                 await startScan(activeCompany.slug);
@@ -3053,6 +3195,7 @@ export default function App() {
                                     await loadCompany(activeCompany.slug);
                                   })
                                 }
+                                disabled={!canDeleteScan}
                               >
                                 Delete
                               </button>
@@ -3595,6 +3738,7 @@ export default function App() {
                   <input
                     value={renameInput}
                     onChange={(e) => setRenameInput(e.target.value)}
+                    disabled={!canManageActiveCompany}
                   />
                   <button
                     onClick={() =>
@@ -3605,6 +3749,7 @@ export default function App() {
                         await loadCompany(activeCompany.slug);
                       })
                     }
+                    disabled={!canManageActiveCompany}
                   >
                     Save
                   </button>
@@ -3626,6 +3771,7 @@ export default function App() {
                         }
                         title={`Delete ${domain}`}
                         aria-label={`Delete ${domain}`}
+                        disabled={!canManageActiveCompany}
                       >
                         🗑
                       </button>
@@ -3638,6 +3784,7 @@ export default function App() {
                     value={addDomainInput}
                     onChange={(e) => setAddDomainInput(e.target.value)}
                     placeholder="new.example.com"
+                    disabled={!canManageActiveCompany}
                   />
                 </label>
                 <button
@@ -3653,6 +3800,7 @@ export default function App() {
                       await loadCompany(activeCompany.slug);
                     })
                   }
+                  disabled={!canManageActiveCompany}
                 >
                   Add domain
                 </button>

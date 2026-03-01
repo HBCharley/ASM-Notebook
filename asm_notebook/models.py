@@ -12,6 +12,8 @@ class Company(Base):
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    owner_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    visibility: Mapped[str] = mapped_column(String(32), default="private")
 
     domains: Mapped[list["CompanyDomain"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
@@ -70,3 +72,20 @@ class ScanArtifact(Base):
     json_text: Mapped[str] = mapped_column(Text)
 
     scan: Mapped["ScanRun"] = relationship(back_populates="artifacts")
+
+
+class ScanRateLimit(Base):
+    __tablename__ = "scan_rate_limits"
+    __table_args__ = (
+        UniqueConstraint("scope", "key", "window_start", name="uq_scan_rate_limit"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope: Mapped[str] = mapped_column(String(32))
+    key: Mapped[str] = mapped_column(String(255), index=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    next_allowed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )

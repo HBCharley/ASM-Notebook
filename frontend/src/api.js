@@ -6,12 +6,26 @@ const BASIC_AUTH_HEADER =
   BASIC_USER || BASIC_PASS
     ? `Basic ${btoa(`${BASIC_USER}:${BASIC_PASS}`)}`
     : "";
+let AUTH_TOKEN = "";
+
+export function setAuthToken(token) {
+  AUTH_TOKEN = token || "";
+}
+
+export function getAuthToken() {
+  return AUTH_TOKEN;
+}
 
 async function request(path, options = {}) {
+  const authHeader = AUTH_TOKEN
+    ? `Bearer ${AUTH_TOKEN}`
+    : BASIC_AUTH_HEADER
+      ? BASIC_AUTH_HEADER
+      : "";
   const res = await fetch(`${BASE}${API_PREFIX}${path}`, {
     headers: {
       "Content-Type": "application/json",
-      ...(BASIC_AUTH_HEADER ? { Authorization: BASIC_AUTH_HEADER } : {}),
+      ...(authHeader ? { Authorization: authHeader } : {}),
       ...(options.headers || {}),
     },
     ...options,
@@ -30,11 +44,14 @@ async function request(path, options = {}) {
   }
   if (!res.ok) {
     const detail =
-      (data && data.detail) ||
+      (data && (data.message || data.detail)) ||
       (text && !data ? text : null) ||
       res.statusText ||
       "Request failed";
-    throw new Error(detail);
+    const err = new Error(detail);
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
   return data;
 }
@@ -63,4 +80,5 @@ export const api = {
   getArtifacts: (slug, id) => request(`/companies/${slug}/scans/${id}/artifacts`),
   deleteScan: (slug, id) =>
     request(`/companies/${slug}/scans/${id}`, { method: "DELETE" }),
+  getMe: () => request("/me"),
 };

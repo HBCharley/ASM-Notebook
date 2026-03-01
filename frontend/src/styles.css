@@ -113,6 +113,25 @@ body {
   flex-wrap: wrap;
 }
 
+.auth-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auth-meta {
+  font-size: 12px;
+}
+
+.public-banner {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-bottom: 1px solid var(--line);
+  padding: 8px 16px;
+  font-size: 12px;
+  text-align: center;
+}
+
 .header-label {
   display: flex;
   flex-direction: column;

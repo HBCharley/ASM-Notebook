@@ -10,3 +10,5 @@ psycopg[binary]
 alembic
 ipwhois
 cryptography
+google-auth
+requests

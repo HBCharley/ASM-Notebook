@@ -40,6 +40,9 @@ export default function SocDashboard({
   onExportArtifacts,
   onOpenDetails,
   onChangeViewMode,
+  canManageCompany,
+  canStartScan,
+  canDeleteScan,
 }) {
   const roots = artifacts?.domains?.roots || [];
   const allDomains = artifacts?.domains?.domains || [];
@@ -433,11 +436,11 @@ export default function SocDashboard({
             />
             <span>Deep scan</span>
           </label>
-          <button className="ghost" onClick={onManageDetails}>
+          <button className="ghost" onClick={onManageDetails} disabled={!canManageCompany}>
             Manage details
           </button>
           <button onClick={onLoadLatest}>Load latest scan</button>
-          <button className="ghost" onClick={onStartScan}>
+          <button className="ghost" onClick={onStartScan} disabled={!canStartScan}>
             Start new scan
           </button>
         </div>

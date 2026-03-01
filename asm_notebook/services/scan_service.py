@@ -5,7 +5,7 @@ import json
 import os
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from time import perf_counter
 from typing import Any, Callable
 
@@ -15,7 +15,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
-from ..models import Company, ScanArtifact, ScanRun
+from ..models import Company, ScanArtifact, ScanRateLimit, ScanRun
+from ..security import Principal
 from ..plugins.ct import ct_subdomains
 from ..plugins.dns import resolve_dns, resolve_ips
 from ..plugins.http_meta import fetch_http_metadata
@@ -55,10 +56,185 @@ def _is_test_mode() -> bool:
     return os.getenv("ASM_TEST_MODE", "").strip() == "1"
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except Exception:
+        return default
+
+
+def _scan_limits(role: str) -> dict[str, int]:
+    if role == "admin":
+        return {
+            "cooldown_seconds": _env_int("ADMIN_SCAN_COOLDOWN_SECONDS", 300),
+            "scans_per_hour": _env_int("ADMIN_SCANS_PER_HOUR", 20),
+        }
+    if role == "user":
+        return {
+            "cooldown_seconds": _env_int("USER_SCAN_COOLDOWN_SECONDS", 1800),
+            "scans_per_hour": _env_int("USER_SCANS_PER_HOUR", 2),
+        }
+    return {"cooldown_seconds": 0, "scans_per_hour": 0}
+
+
+def _hour_bucket(now: datetime) -> datetime:
+    return now.replace(minute=0, second=0, microsecond=0)
+
+
+def _rate_limited(message: str, retry_after_seconds: int) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail={
+            "error": "rate_limited",
+            "message": message,
+            "retry_after_seconds": max(0, int(retry_after_seconds)),
+        },
+    )
+
+
 def _company_by_slug(session: SessionLocal, slug: str) -> Company | None:
     return session.execute(
         select(Company).where(Company.slug == slug)
     ).scalar_one_or_none()
+
+
+def _enforce_scan_limits(
+    s: Session,
+    principal: Principal,
+    company: Company,
+) -> None:
+    now = _now_utc()
+    limits = _scan_limits(principal.role)
+    cooldown_seconds = limits["cooldown_seconds"]
+    scans_per_hour = limits["scans_per_hour"]
+
+    running_scan = (
+        s.execute(
+            select(ScanRun)
+            .where(
+                ScanRun.company_id == company.id,
+                ScanRun.status == "running",
+            )
+            .with_for_update()
+        )
+        .scalars()
+        .first()
+    )
+    if running_scan:
+        raise _rate_limited(
+            "Scan already running for this company.",
+            retry_after_seconds=60,
+        )
+
+    if cooldown_seconds > 0:
+        company_key = str(company.id)
+        last_company_rl = (
+            s.execute(
+                select(ScanRateLimit)
+                .where(
+                    ScanRateLimit.scope == "company",
+                    ScanRateLimit.key == company_key,
+                )
+                .order_by(ScanRateLimit.next_allowed_at.desc().nullslast())
+                .limit(1)
+                .with_for_update()
+            )
+            .scalars()
+            .first()
+        )
+        if last_company_rl and last_company_rl.next_allowed_at:
+            if last_company_rl.next_allowed_at > now:
+                retry_after = int(
+                    (last_company_rl.next_allowed_at - now).total_seconds()
+                )
+                raise _rate_limited(
+                    "Company scan cooldown active.",
+                    retry_after_seconds=retry_after,
+                )
+
+    if scans_per_hour > 0:
+        email = principal.email or ""
+        if not email:
+            raise _rate_limited(
+                "Scan quota unavailable (missing user identity).",
+                retry_after_seconds=3600,
+            )
+        window_start = _hour_bucket(now)
+        user_rl = (
+            s.execute(
+                select(ScanRateLimit)
+                .where(
+                    ScanRateLimit.scope == "user",
+                    ScanRateLimit.key == email,
+                    ScanRateLimit.window_start == window_start,
+                )
+                .with_for_update()
+            )
+            .scalars()
+            .first()
+        )
+        if user_rl and user_rl.count >= scans_per_hour:
+            retry_after = int(
+                (window_start + timedelta(hours=1) - now).total_seconds()
+            )
+            raise _rate_limited(
+                "User scan rate limit reached.",
+                retry_after_seconds=max(retry_after, 60),
+            )
+
+    if scans_per_hour > 0 and principal.email:
+        window_start = _hour_bucket(now)
+        user_rl = (
+            s.execute(
+                select(ScanRateLimit)
+                .where(
+                    ScanRateLimit.scope == "user",
+                    ScanRateLimit.key == principal.email,
+                    ScanRateLimit.window_start == window_start,
+                )
+                .with_for_update()
+            )
+            .scalars()
+            .first()
+        )
+        if not user_rl:
+            user_rl = ScanRateLimit(
+                scope="user",
+                key=principal.email,
+                window_start=window_start,
+                count=0,
+            )
+            s.add(user_rl)
+        user_rl.count += 1
+        user_rl.updated_at = now
+
+    if cooldown_seconds > 0:
+        company_key = str(company.id)
+        window_start = _hour_bucket(now)
+        company_rl = (
+            s.execute(
+                select(ScanRateLimit)
+                .where(
+                    ScanRateLimit.scope == "company",
+                    ScanRateLimit.key == company_key,
+                    ScanRateLimit.window_start == window_start,
+                )
+                .with_for_update()
+            )
+            .scalars()
+            .first()
+        )
+        if not company_rl:
+            company_rl = ScanRateLimit(
+                scope="company",
+                key=company_key,
+                window_start=window_start,
+                count=0,
+            )
+            s.add(company_rl)
+        company_rl.count += 1
+        company_rl.next_allowed_at = now + timedelta(seconds=cooldown_seconds)
+        company_rl.updated_at = now
 
 
 def _provider_hints(rec: dict[str, Any]) -> list[str]:
@@ -1134,46 +1310,50 @@ def trigger_scan(
     slug: str,
     background_tasks: BackgroundTasks,
     deep_scan: bool = False,
+    principal: Principal | None = None,
 ) -> dict[str, Any]:
     with SessionLocal() as s:
-        company = _company_by_slug(s, slug)
-        if not company:
-            raise HTTPException(status_code=404, detail="Company not found")
+        with s.begin():
+            company = _company_by_slug(s, slug)
+            if not company:
+                raise HTTPException(status_code=404, detail="Company not found")
 
-        roots = {normalize_domain(d.domain) for d in company.domains}
-        if not roots:
-            raise HTTPException(status_code=400, detail="Company has no domains")
+            roots = {normalize_domain(d.domain) for d in company.domains}
+            if not roots:
+                raise HTTPException(status_code=400, detail="Company has no domains")
 
-        last_num = s.execute(
-            select(func.max(ScanRun.company_scan_number)).where(
-                ScanRun.company_id == company.id
+            if principal:
+                _enforce_scan_limits(s, principal, company)
+
+            last_num = s.execute(
+                select(func.max(ScanRun.company_scan_number)).where(
+                    ScanRun.company_id == company.id
+                )
+            ).scalar_one()
+            next_num = (last_num or 0) + 1
+
+            scan = ScanRun(
+                company_id=company.id,
+                company_scan_number=next_num,
+                status="running",
+                started_at=_now_utc(),
             )
-        ).scalar_one()
-        next_num = (last_num or 0) + 1
-
-        scan = ScanRun(
-            company_id=company.id,
-            company_scan_number=next_num,
-            status="running",
-            started_at=_now_utc(),
-        )
-        s.add(scan)
-        s.flush()
-        scan_id = scan.id
-        scan_number = scan.company_scan_number
-        s.add(
-            ScanArtifact(
-                scan_id=scan_id,
-                artifact_type="scan_meta",
-                json_text=_json_dumps(
-                    {
-                        "mode": "deep" if deep_scan else "standard",
-                        "deep_scan": bool(deep_scan),
-                    }
-                ),
+            s.add(scan)
+            s.flush()
+            scan_id = scan.id
+            scan_number = scan.company_scan_number
+            s.add(
+                ScanArtifact(
+                    scan_id=scan_id,
+                    artifact_type="scan_meta",
+                    json_text=_json_dumps(
+                        {
+                            "mode": "deep" if deep_scan else "standard",
+                            "deep_scan": bool(deep_scan),
+                        }
+                    ),
+                )
             )
-        )
-        s.commit()
 
     background_tasks.add_task(
         _execute_scan,

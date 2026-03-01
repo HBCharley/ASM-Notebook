@@ -33,6 +33,16 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Structured JSON artifacts
 - Hardened company-scoped access
 
+## Auth & RBAC (Demo Mode)
+
+- Optional Google OIDC authentication (ID tokens).
+- Public (unauthenticated or unlisted email) is read-only and limited to `PUBLIC_COMPANY_SLUGS`.
+- Authenticated roles:
+  - `ADMIN_EMAILS` = full access (rate-limited).
+  - `USER_EMAILS` = limited access (owned companies only, max 3, strict scan limits).
+
+Use `GET /v1/me` to see the effective role and limits.
+
 ## CVE Data
 
 - CVE enrichment uses NVD JSON feeds (last 2 years by default) cached under `asm_notebook/data/nvd/`.
@@ -172,6 +182,12 @@ Required env vars:
 - `ASM_DATABASE_URL` (PostgreSQL URL)
 - `ASM_CORS_ORIGINS` (comma-separated allowed origins)
 - `ASM_TEST_MODE` (optional, default `0`)
+- `GOOGLE_OAUTH_CLIENT_ID` (Google OAuth client ID for ID token verification)
+- `ADMIN_EMAILS` (comma-separated)
+- `USER_EMAILS` (comma-separated)
+- `PUBLIC_COMPANY_SLUGS` (comma-separated; default `company-a,company-b`)
+- `ADMIN_SCAN_COOLDOWN_SECONDS` / `ADMIN_SCANS_PER_HOUR`
+- `USER_SCAN_COOLDOWN_SECONDS` / `USER_SCANS_PER_HOUR`
 
 Security notes:
 
@@ -197,6 +213,7 @@ Notes:
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
 - API versioning: `/v1/*` routes are available.
 - Frontend can override the prefix with `VITE_API_PREFIX` (default `/v1`).
+- Google login uses `VITE_GOOGLE_CLIENT_ID` (must match backend `GOOGLE_OAUTH_CLIENT_ID`).
 
 ## Frontend UX
 
@@ -281,6 +298,7 @@ poetry run python -m asm_notebook.cli company delete testco --yes
 Health:
 
 - `GET /v1/health`
+- `GET /v1/me`
 
 Companies:
 

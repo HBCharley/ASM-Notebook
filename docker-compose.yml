@@ -29,6 +29,14 @@ services:
       ASM_DATABASE_URL: ${ASM_DATABASE_URL}
       ASM_CORS_ORIGINS: ${ASM_CORS_ORIGINS:-}
       ASM_TEST_MODE: ${ASM_TEST_MODE:-0}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      USER_EMAILS: ${USER_EMAILS:-}
+      PUBLIC_COMPANY_SLUGS: ${PUBLIC_COMPANY_SLUGS:-company-a,company-b}
+      ADMIN_SCAN_COOLDOWN_SECONDS: ${ADMIN_SCAN_COOLDOWN_SECONDS:-300}
+      ADMIN_SCANS_PER_HOUR: ${ADMIN_SCANS_PER_HOUR:-20}
+      USER_SCAN_COOLDOWN_SECONDS: ${USER_SCAN_COOLDOWN_SECONDS:-1800}
+      USER_SCANS_PER_HOUR: ${USER_SCANS_PER_HOUR:-2}
     ports:
       - "8000:8000"
     volumes:
@@ -50,6 +58,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://127.0.0.1:8000}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
     container_name: asm-frontend
     depends_on:
       - api

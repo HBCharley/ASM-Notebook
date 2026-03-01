@@ -108,6 +108,9 @@ export default function ExecutiveDashboard({
   onDeleteCompany,
   onExportArtifacts,
   onOpenDetails,
+  canManageCompany,
+  canStartScan,
+  canDeleteScan,
 }) {
   const roots = artifacts?.domains?.roots || [];
   const allDomains = artifacts?.domains?.domains || [];
@@ -376,11 +379,11 @@ export default function ExecutiveDashboard({
             />
             <span>Deep scan</span>
           </label>
-          <button className="ghost" onClick={onManageDetails}>
+          <button className="ghost" onClick={onManageDetails} disabled={!canManageCompany}>
             Manage details
           </button>
           <button onClick={onLoadLatest}>Load latest scan</button>
-          <button className="ghost" onClick={onStartScan}>
+          <button className="ghost" onClick={onStartScan} disabled={!canStartScan}>
             Start new scan
           </button>
         </div>
@@ -661,7 +664,7 @@ export default function ExecutiveDashboard({
               <button
                 className="ghost danger"
                 onClick={() => onDeleteScan?.(activeScan)}
-                disabled={!activeScan}
+                disabled={!activeScan || !canDeleteScan}
               >
                 Delete scan
               </button>
@@ -689,10 +692,14 @@ export default function ExecutiveDashboard({
             <div className="exec-quick-label">Company</div>
             <div className="exec-quick-meta">{activeCompany?.slug || "-"}</div>
             <div className="exec-quick-actions">
-              <button className="ghost" onClick={onManageDetails}>
+              <button className="ghost" onClick={onManageDetails} disabled={!canManageCompany}>
                 Manage details
               </button>
-              <button className="ghost danger" onClick={onDeleteCompany}>
+              <button
+                className="ghost danger"
+                onClick={onDeleteCompany}
+                disabled={!canManageCompany}
+              >
                 Delete company
               </button>
             </div>
