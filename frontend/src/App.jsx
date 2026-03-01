@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import logoLight from "./assets/logo-light.png";
 import logoDark from "./assets/logo-dark.png";
-import AlternateDashboard from "./components/dashboard/AlternateDashboard.jsx";
+import ExecutiveDashboard from "./components/dashboard/ExecutiveDashboard.jsx";
+import SocDashboard from "./components/dashboard/SocDashboard.jsx";
+import ViewModeSwitcher from "./components/ViewModeSwitcher.jsx";
 
 const ADD_CUSTOMER_OPTION = "__add_customer__";
 const USER_STORAGE_KEY = "asm.users";
@@ -10,7 +12,7 @@ const GROUP_STORAGE_KEY = "asm.groups";
 const ACTIVE_USER_KEY = "asm.user.active";
 const COMPANY_GROUP_KEY = "asm.company.groups";
 const USER_THEME_KEY = "asm.user.theme";
-const UI_MODE_KEY = "asm.ui.mode";
+const UI_MODE_KEY = "asm_ui_mode";
 const NEW_GROUP_OPTION = "__new_group__";
 
 function readStoredJson(key, fallback) {
@@ -44,7 +46,9 @@ function setThemeForUser(userId, theme) {
 }
 
 function normalizeUiMode(value) {
-  return value === "alternate" ? "alternate" : "default";
+  if (value === "executive") return "executive";
+  if (value === "soc") return "soc";
+  return "standard";
 }
 
 
@@ -118,6 +122,28 @@ function parseScanProgress(scan) {
     };
   }
   return null;
+}
+
+function getScanTimestamp(scan) {
+  const candidate = scan.completed_at || scan.started_at || "";
+  if (!candidate) return 0;
+  const ts = new Date(candidate).getTime();
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function getLatestCompleteScan(scans) {
+  const completed = scans.filter(
+    (scan) => (scan.status || "").toLowerCase() === "success"
+  );
+  if (!completed.length) return null;
+  return completed.reduce((latest, scan) => {
+    const latestTs = getScanTimestamp(latest);
+    const currentTs = getScanTimestamp(scan);
+    if (currentTs === latestTs) {
+      return scan.id > latest.id ? scan : latest;
+    }
+    return currentTs > latestTs ? scan : latest;
+  });
 }
 
 function normalizeDomain(input) {
@@ -1814,8 +1840,11 @@ export default function App() {
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(() => getThemeForUser(""));
   const [uiMode, setUiMode] = useState(() => {
-    if (typeof window === "undefined") return "default";
-    return normalizeUiMode(window.localStorage.getItem(UI_MODE_KEY));
+    if (typeof window === "undefined") return "standard";
+    const stored =
+      window.localStorage.getItem(UI_MODE_KEY) ||
+      window.localStorage.getItem("asm.ui.mode");
+    return normalizeUiMode(stored);
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
@@ -1967,6 +1996,19 @@ export default function App() {
     setScans(scanList);
     setAddDomainInput("");
     setRenameInput(company.name);
+    const selectedExists =
+      selectedScanId && scanList.some((scan) => scan.id === selectedScanId);
+    if (selectedExists) {
+      return;
+    }
+    const latestComplete = getLatestCompleteScan(scanList);
+    if (latestComplete) {
+      setSelectedScanId(latestComplete.id);
+      await loadArtifacts(slug, latestComplete.id);
+    } else {
+      setSelectedScanId(null);
+      setArtifacts(null);
+    }
   }
 
   async function loadArtifacts(slug, scanId) {
@@ -2021,6 +2063,13 @@ export default function App() {
       setError(err.message || "Request failed");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function persistUiMode(next) {
+    setUiMode(next);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(UI_MODE_KEY, next);
     }
   }
 
@@ -2356,6 +2405,20 @@ export default function App() {
   }, [userModalDragging, userModalResizing]);
 
   useEffect(() => {
+    if (!settingsOpen && !userModalOpen && !customerModalOpen) {
+      return;
+    }
+    const onKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      setSettingsOpen(false);
+      setUserModalOpen(false);
+      setCustomerModalOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [settingsOpen, userModalOpen, customerModalOpen]);
+
+  useEffect(() => {
     const slug = activeCompany?.slug;
     if (!slug || !hasRunningScan) {
       return undefined;
@@ -2420,6 +2483,10 @@ export default function App() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="header-label">
+            View:
+            <ViewModeSwitcher value={uiMode} onChange={persistUiMode} />
           </label>
           {selectedCustomer === ADD_CUSTOMER_OPTION ? (
             <div className="header-create">
@@ -2488,18 +2555,6 @@ export default function App() {
           >
             Refresh
           </button>
-          <label className="checkbox-toggle">
-            <input
-              type="checkbox"
-              checked={deepScan}
-              onChange={(e) => {
-                const next = e.target.checked;
-                setDeepScan(next);
-                window.localStorage.setItem("asm.scan.deep", String(next));
-              }}
-            />
-            Deep scan
-          </label>
           {activeCompany ? (
             <button className="ghost header-action" onClick={() => setCustomerModalOpen(true)}>
               Manage details
@@ -2562,44 +2617,188 @@ export default function App() {
             </div>
           ) : (
             <>
-              {uiMode === "alternate" ? (
-                <AlternateDashboard
-                  activeCompany={activeCompany}
-                  activeScan={activeScan}
-                  artifacts={artifacts}
-                  scans={scans}
-                  selectedScanId={selectedScanId}
-                  hasRunningScan={hasRunningScan}
-                  runningScan={runningScan}
-                  scanProgress={scanProgress}
-                  deepScan={deepScan}
-                  onToggleDeepScan={(next) => {
-                    setDeepScan(next);
-                    window.localStorage.setItem("asm.scan.deep", String(next));
-                  }}
-                  onManageDetails={() => setCustomerModalOpen(true)}
-                  onLoadLatest={() =>
-                    runWithStatus(async () => {
-                      const latest = await api.latestScan(activeCompany.slug);
-                      setSelectedScanId(latest.id);
-                      await loadArtifacts(activeCompany.slug, latest.id);
-                    })
-                  }
-                  onStartScan={() =>
-                    runWithStatus(async () => {
-                      await startScan(activeCompany.slug);
-                    })
-                  }
-                  onSelectScan={(scanId) =>
-                    runWithStatus(async () => {
-                      setSelectedScanId(scanId);
-                      await loadArtifacts(activeCompany.slug, scanId);
-                    })
-                  }
-                />
-              ) : null}
-              {uiMode !== "alternate" ? (
-                <>
+              <>
+                {uiMode === "executive" ? (
+                  <ExecutiveDashboard
+                    activeCompany={activeCompany}
+                    activeScan={activeScan}
+                    artifacts={artifacts}
+                    scans={scans}
+                    selectedScanId={selectedScanId}
+                    hasRunningScan={hasRunningScan}
+                    runningScan={runningScan}
+                    scanProgress={scanProgress}
+                    deepScan={deepScan}
+                    onToggleDeepScan={(next) => {
+                      setDeepScan(next);
+                      window.localStorage.setItem("asm.scan.deep", String(next));
+                    }}
+                    onManageDetails={() => setCustomerModalOpen(true)}
+                    onLoadLatest={() =>
+                      runWithStatus(async () => {
+                        const latest = await api.latestScan(activeCompany.slug);
+                        setSelectedScanId(latest.id);
+                        await loadArtifacts(activeCompany.slug, latest.id);
+                      })
+                    }
+                    onStartScan={() =>
+                      runWithStatus(async () => {
+                        await startScan(activeCompany.slug);
+                      })
+                    }
+                    onSelectScan={(scanId) =>
+                      runWithStatus(async () => {
+                        if (!scanId) return;
+                        setSelectedScanId(scanId);
+                        await loadArtifacts(activeCompany.slug, scanId);
+                      })
+                    }
+                    onDeleteScan={(scan) =>
+                      runWithStatus(async () => {
+                        if (!scan) return;
+                        const label = scan?.company_scan_number
+                          ? `scan #${scan.company_scan_number}`
+                          : `scan id ${scan?.id ?? "-"}`;
+                        const runningNotice =
+                          (scan?.status || "").toLowerCase() === "running"
+                            ? " This will cancel the running scan."
+                            : "";
+                        if (
+                          !confirm(
+                            `Delete ${label} for ${activeCompany.slug}?${runningNotice}`
+                          )
+                        ) {
+                          return;
+                        }
+                        await api.deleteScan(activeCompany.slug, scan.id);
+                        if (scan.id === selectedScanId) {
+                          setSelectedScanId(null);
+                          setArtifacts(null);
+                        }
+                        await loadCompany(activeCompany.slug);
+                      })
+                    }
+                    onDeleteCompany={() =>
+                      runWithStatus(async () => {
+                        if (
+                          !confirm(
+                            `Delete company '${activeCompany.slug}' and all scans?`
+                          )
+                        ) {
+                          return;
+                        }
+                        await api.deleteCompany(activeCompany.slug);
+                        setSelectedCustomer(ADD_CUSTOMER_OPTION);
+                        setActiveCompany(null);
+                        setScans([]);
+                        setArtifacts(null);
+                        await loadCompanies();
+                      })
+                    }
+                    onExportArtifacts={exportArtifactsJson}
+                    onOpenDetails={() => {
+                      setScansSectionOpen(true);
+                      window.localStorage.setItem("asm.scans.open", "true");
+                      setTimeout(() => {
+                        scansCardRef.current?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                      }, 50);
+                    }}
+                    onChangeViewMode={persistUiMode}
+                  />
+                ) : null}
+                {uiMode === "soc" ? (
+                  <SocDashboard
+                    activeCompany={activeCompany}
+                    activeScan={activeScan}
+                    artifacts={artifacts}
+                    scans={scans}
+                    selectedScanId={selectedScanId}
+                    hasRunningScan={hasRunningScan}
+                    runningScan={runningScan}
+                    scanProgress={scanProgress}
+                    deepScan={deepScan}
+                    onToggleDeepScan={(next) => {
+                      setDeepScan(next);
+                      window.localStorage.setItem("asm.scan.deep", String(next));
+                    }}
+                    onManageDetails={() => setCustomerModalOpen(true)}
+                    onLoadLatest={() =>
+                      runWithStatus(async () => {
+                        const latest = await api.latestScan(activeCompany.slug);
+                        setSelectedScanId(latest.id);
+                        await loadArtifacts(activeCompany.slug, latest.id);
+                      })
+                    }
+                    onStartScan={() =>
+                      runWithStatus(async () => {
+                        await startScan(activeCompany.slug);
+                      })
+                    }
+                    onSelectScan={(scanId) =>
+                      runWithStatus(async () => {
+                        if (!scanId) return;
+                        setSelectedScanId(scanId);
+                        await loadArtifacts(activeCompany.slug, scanId);
+                      })
+                    }
+                    onDeleteScan={(scan) =>
+                      runWithStatus(async () => {
+                        if (!scan) return;
+                        const label = scan?.company_scan_number
+                          ? `scan #${scan.company_scan_number}`
+                          : `scan id ${scan?.id ?? "-"}`;
+                        const runningNotice =
+                          (scan?.status || "").toLowerCase() === "running"
+                            ? " This will cancel the running scan."
+                            : "";
+                        if (
+                          !confirm(
+                            `Delete ${label} for ${activeCompany.slug}?${runningNotice}`
+                          )
+                        ) {
+                          return;
+                        }
+                        await api.deleteScan(activeCompany.slug, scan.id);
+                        if (scan.id === selectedScanId) {
+                          setSelectedScanId(null);
+                          setArtifacts(null);
+                        }
+                        await loadCompany(activeCompany.slug);
+                      })
+                    }
+                    onDeleteCompany={() =>
+                      runWithStatus(async () => {
+                        if (
+                          !confirm(
+                            `Delete company '${activeCompany.slug}' and all scans?`
+                          )
+                        ) {
+                          return;
+                        }
+                        await api.deleteCompany(activeCompany.slug);
+                        setSelectedCustomer(ADD_CUSTOMER_OPTION);
+                        setActiveCompany(null);
+                        setScans([]);
+                        setArtifacts(null);
+                        await loadCompanies();
+                      })
+                    }
+                    onExportArtifacts={exportArtifactsJson}
+                    onOpenDetails={() => {
+                      setScansSectionOpen(true);
+                      window.localStorage.setItem("asm.scans.open", "true");
+                      setTimeout(() => {
+                        scansCardRef.current?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                      }, 50);
+                    }}
+                  />
+                ) : null}
                 <section
                   ref={customerCardRef}
                   className={`card ${customerSectionOpen ? "resizable-card" : "collapsed"}`}
@@ -3025,9 +3224,8 @@ export default function App() {
                 ) : (
                   <div className="muted">Section minimized</div>
                 )}
-              </section>
-                </>
-              ) : null}
+                  </section>
+              </>
             </>
           )}
 
@@ -3068,44 +3266,6 @@ export default function App() {
                     <span className="toggle-thumb" />
                   </span>
                 </label>
-              </div>
-            </div>
-            <div className="settings-row">
-              <div className="settings-toggle">
-                <div>
-                  <div className="settings-label">UI Mode</div>
-                  <div className="muted">
-                    {uiMode === "alternate" ? "Alternate UI" : "Default UI"}
-                  </div>
-                </div>
-                <div className="ui-mode-toggle" role="radiogroup" aria-label="UI mode">
-                  <label className={`radio-chip ${uiMode === "default" ? "active" : ""}`}>
-                    <input
-                      type="radio"
-                      name="uiMode"
-                      value="default"
-                      checked={uiMode === "default"}
-                      onChange={() => {
-                        setUiMode("default");
-                        window.localStorage.setItem(UI_MODE_KEY, "default");
-                      }}
-                    />
-                    <span>Default</span>
-                  </label>
-                  <label className={`radio-chip ${uiMode === "alternate" ? "active" : ""}`}>
-                    <input
-                      type="radio"
-                      name="uiMode"
-                      value="alternate"
-                      checked={uiMode === "alternate"}
-                      onChange={() => {
-                        setUiMode("alternate");
-                        window.localStorage.setItem(UI_MODE_KEY, "alternate");
-                      }}
-                    />
-                    <span>Alternate</span>
-                  </label>
-                </div>
               </div>
             </div>
             <div className="settings-row">

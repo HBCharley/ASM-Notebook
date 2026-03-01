@@ -28,3 +28,8 @@ Cloud Build frontend substitution:
 
 - Python lockfile present: `poetry.lock`.
 - Frontend lockfile present: `frontend/package-lock.json`.
+
+## Frontend Views
+
+- View modes: `Standard`, `Executive`, and `SOC Analyst` via the header view switcher.
+- Selection persists in local storage (`asm_ui_mode`) and does not affect backend API behavior.

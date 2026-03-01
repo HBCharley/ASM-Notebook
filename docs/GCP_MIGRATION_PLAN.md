@@ -33,6 +33,7 @@ This plan migrates the current local POC (FastAPI + React + SQLite) to a product
    - external API/timeouts/retry knobs
    - any auth credentials
 3. Keep local dev compatibility (`.env.local` + existing commands).
+4. Preserve frontend view modes (Standard / Executive / SOC Analyst) across environments.
 
 ## Phase 3: Database Migration (SQLite -> PostgreSQL)
 

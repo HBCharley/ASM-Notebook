@@ -14,6 +14,7 @@ Use this checklist to formally close the local/POC phase before GCP migration.
 - [x] Record current env vars in use (`ASM_DB_PATH`, `ASM_TEST_MODE`, frontend `VITE_*`).
 - [x] Confirm known gaps accepted from POC phase (no job queue, SQLite local-first).
 - [x] Lock dependency set (`poetry.lock` committed, Node lockfile committed if used).
+- [ ] Document UI view modes and expected workflows in `README.md`.
 
 ## 3) Security and Data Hygiene
 

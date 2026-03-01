@@ -168,6 +168,9 @@ Notes:
 
 ## Frontend UX
 
+- View modes:
+  - `Standard` (default) and `Executive` (KPI-focused) plus `SOC Analyst` (high-density) are available via the header switcher.
+  - Mode selection persists in local storage under `asm_ui_mode`.
 - Customer selection is dropdown-driven:
   - Default option is `Add Customer`
   - Creating a customer requires `Customer name` and `Domain`
