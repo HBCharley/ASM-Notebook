@@ -156,14 +156,6 @@ Local dev (Docker):
 2. Verify health:
    - `curl http://127.0.0.1:8000/v1/health`
 
-One-time migration flow:
-
-1. Start PostgreSQL only:
-   - `docker compose up -d db`
-2. Run the migration script:
-   - `python .\scripts\migrate_sqlite_to_postgres.py --sqlite sqlite:///path/to/asm_notebook.sqlite3 --postgres "<your PostgreSQL URL>" --yes-i-know-this-truncates`
-3. Verify row counts (script outputs table counts and asserts equality).
-
 API validation (curl):
 
 - `curl http://127.0.0.1:8000/v1/health`
@@ -392,19 +384,6 @@ Invoke-RestMethod "http://127.0.0.1:8000/v1/companies/example/scans/by-number/1"
 - Local Dockerized PostgreSQL is available via `docker-compose.yml`.
 - Scan artifacts are stored as JSON in the database and can be exported via `scan export`.
 - The database file is intentionally excluded from Git.
-
-## One-Time Legacy DB -> PostgreSQL Migration
-
-Use the migration script to move data from an existing legacy DB file into PostgreSQL:
-
-```powershell
-python .\scripts\migrate_sqlite_to_postgres.py `
-  --sqlite sqlite:///path/to/asm_notebook.sqlite3 `
-  --postgres "<your PostgreSQL URL>" `
-  --yes-i-know-this-truncates
-```
-
-The script truncates destination tables and reloads all rows in dependency order.
 
 ## POC Closeout and Cloud Migration
 
