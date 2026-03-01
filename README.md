@@ -145,12 +145,6 @@ Health check:
 Invoke-RestMethod "http://127.0.0.1:8000/health"
 ```
 
-Health check:
-
-```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/health"
-```
-
 ## Demo Runbook
 
 Local dev (Docker):

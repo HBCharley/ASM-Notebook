@@ -27,7 +27,7 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=DATABASE_URL,
+        url=_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
