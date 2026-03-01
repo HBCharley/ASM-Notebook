@@ -39,6 +39,14 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
@@ -143,9 +151,10 @@ def _enforce_scan_limits(
             .first()
         )
         if last_company_rl and last_company_rl.next_allowed_at:
-            if last_company_rl.next_allowed_at > now:
+            next_allowed = _as_utc(last_company_rl.next_allowed_at)
+            if next_allowed and next_allowed > now:
                 retry_after = int(
-                    (last_company_rl.next_allowed_at - now).total_seconds()
+                    (next_allowed - now).total_seconds()
                 )
                 raise _rate_limited(
                     "Company scan cooldown active.",
