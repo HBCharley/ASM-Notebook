@@ -27,7 +27,8 @@ from .company_service import normalize_domain
 from .cve_service import find_cves
 
 _CANCELLED_SCANS: set[int] = set()
-logger = logging.getLogger("asm_notebook.scan")
+logger = logging.getLogger("uvicorn.error")
+logger.setLevel(logging.INFO)
 
 
 class ScanCancelled(Exception):
