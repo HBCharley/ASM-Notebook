@@ -91,5 +91,5 @@ Cloud Tasks is now the default async scan execution path.
 1. Implement backend DB URL abstraction and Alembic.
 2. Add backend Dockerfile + Cloud Run deploy script.
 3. Provision Cloud SQL and connect backend.
-4. Replace FastAPI background task with Cloud Tasks worker path.
+4. Ensure Cloud Tasks queue + `/api/v1/tasks/run_scan` are configured.
 5. Add auth layer and observability alerts before production use.

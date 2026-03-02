@@ -230,7 +230,6 @@ gcloud run deploy asm-notebook `
   --image <REGION>-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-notebook:latest `
   --region <REGION> `
   --platform managed `
-  --allow-unauthenticated `
   --set-env-vars `
     ASM_DATABASE_URL="<postgres-url>", `
     ASM_CORS_ORIGINS="https://your-domain", `
@@ -268,7 +267,7 @@ gcloud run domain-mappings create --service asm-notebook --domain your-domain --
 
 Security note (production):
 
-- Do not deploy Cloud Run with `--allow-unauthenticated`.
+- Do not deploy Cloud Run with `--allow-unauthenticated`. Use authenticated invokers only.
 - Always set `GOOGLE_OAUTH_CLIENT_ID`, `ASM_TASKS_SECRET`, and explicit `ASM_CORS_ORIGINS`.
 
 Security notes:
