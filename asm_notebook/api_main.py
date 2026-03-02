@@ -17,7 +17,7 @@ from sqlalchemy import func, or_, select
 
 from .services import company_service, scan_service, cve_service
 from .db import SessionLocal
-from .models import Company, ScanArtifact, ScanRun
+from .models import AuthAllowlist, Company, ScanArtifact, ScanRun
 from .security import Principal, forbidden_response, get_principal, public_company_slugs
 
 logger = logging.getLogger("asm_notebook.auth")
@@ -75,6 +75,11 @@ class ScanRequest(BaseModel):
 
 class CompanyUpdate(BaseModel):
     name: str
+
+
+class AuthAllowlistEntry(BaseModel):
+    email: str
+    role: str
 
 
 @app.on_event("startup")
@@ -234,6 +239,77 @@ def me(principal: Principal = Depends(get_principal)) -> dict[str, Any]:
             "owned_company_count": owned_count,
             "scan_limits": _scan_limits(principal.role),
         }
+
+
+@router.get("/admin/auth-allowlist")
+def list_auth_allowlist(
+    principal: Principal = Depends(get_principal),
+) -> list[dict[str, Any]]:
+    if principal.role != "admin":
+        raise forbidden_response(principal.role, "Admin access required")
+    with SessionLocal() as s:
+        entries = (
+            s.execute(select(AuthAllowlist).order_by(AuthAllowlist.email.asc()))
+            .scalars()
+            .all()
+        )
+        return [{"email": row.email, "role": row.role} for row in entries]
+
+
+@router.post("/admin/auth-allowlist", status_code=201)
+def add_auth_allowlist(
+    payload: AuthAllowlistEntry, principal: Principal = Depends(get_principal)
+) -> dict[str, Any]:
+    if principal.role != "admin":
+        raise forbidden_response(principal.role, "Admin access required")
+    email = payload.email.strip().lower()
+    role = payload.role.strip().lower()
+    if role not in {"admin", "user"}:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_role", "message": "Role must be admin or user"},
+        )
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_email", "message": "Email is required"},
+        )
+    with SessionLocal() as s:
+        existing = (
+            s.execute(select(AuthAllowlist).where(AuthAllowlist.email == email))
+            .scalars()
+            .first()
+        )
+        if existing:
+            existing.role = role
+            s.add(existing)
+        else:
+            s.add(AuthAllowlist(email=email, role=role))
+        s.commit()
+    return {"email": email, "role": role}
+
+
+@router.delete("/admin/auth-allowlist/{email}")
+def delete_auth_allowlist(
+    email: str, principal: Principal = Depends(get_principal)
+) -> dict[str, Any]:
+    if principal.role != "admin":
+        raise forbidden_response(principal.role, "Admin access required")
+    email = email.strip().lower()
+    with SessionLocal() as s:
+        existing = (
+            s.execute(select(AuthAllowlist).where(AuthAllowlist.email == email))
+            .scalars()
+            .first()
+        )
+        if not existing:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "message": "Email not found"},
+            )
+        s.delete(existing)
+        s.commit()
+    return {"email": email, "deleted": True}
 
 
 @router.post("/companies", status_code=201)

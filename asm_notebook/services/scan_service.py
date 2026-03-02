@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import os
 import re
 from collections import Counter
@@ -1232,7 +1233,21 @@ def _execute_scan(
             if deep_scan:
                 set_progress(5, 6, f"Looking up ASN for {len(unique_ips)} IPs")
                 t_asn = perf_counter()
-                asn_by_ip = lookup_asn_for_ips(unique_ips)
+                total_timeout = _env_int("ASM_ASN_TOTAL_TIMEOUT_SECONDS", 12)
+                asn_by_ip = {}
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(lookup_asn_for_ips, unique_ips)
+                    try:
+                        asn_by_ip = future.result(timeout=total_timeout)
+                    except FutureTimeout:
+                        logger.warning(
+                            "ASN lookup timed out after %ss for %s IPs",
+                            total_timeout,
+                            len(unique_ips),
+                        )
+                    except Exception:
+                        logger.exception("ASN lookup failed")
+                        asn_by_ip = {}
                 timings["asn_lookup_seconds"] = round(perf_counter() - t_asn, 3)
             else:
                 asn_by_ip = {}

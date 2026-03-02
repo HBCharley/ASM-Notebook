@@ -40,6 +40,9 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Authenticated roles:
   - `ADMIN_EMAILS` = full access (rate-limited).
   - `USER_EMAILS` = limited access (owned companies only, max 3, strict scan limits).
+- Admins can add authenticated users via the database-backed auth allowlist (see Admin tools),
+  which supplements the env allowlists above.
+- Keep at least one admin in `ADMIN_EMAILS` so you can always regain access.
 
 Use `GET /api/v1/me` to see the effective role and limits.
 
@@ -59,6 +62,7 @@ Use `GET /api/v1/me` to see the effective role and limits.
 
 - ASN lookups use RDAP via `ipwhois`. You can cap socket wait time with:
 - `ASM_ASN_TIMEOUT_SECONDS` (default `5`)
+- `ASM_ASN_TOTAL_TIMEOUT_SECONDS` (default `12`) caps total ASN lookup time per scan
 
 ## HTTP Metadata Timeouts
 
@@ -301,7 +305,9 @@ Notes:
 - Multi-user (UI only):
   - Switch between users (no real auth)
   - Admins can manage users, groups, and company group assignments
-  - Settings includes an admin-only Manage companies panel for group assignment
+  - Settings includes admin-only buttons:
+    - `Manage companies` opens a modal to add companies and set group assignment
+    - `Manage users` opens the admin panel (including auth allowlist for Google login)
   - Standard users only see companies assigned to their group
 
 ## CLI
@@ -364,6 +370,12 @@ Scans (company-scoped and hardened):
 - `GET /api/v1/companies/{slug}/scans/{scan_id}/artifacts`
 - `GET /api/v1/companies/{slug}/scans/by-number/{company_scan_number}`
 - `DELETE /api/v1/companies/{slug}/scans/{scan_id}`
+
+Admin (auth allowlist):
+
+- `GET /api/v1/admin/auth-allowlist`
+- `POST /api/v1/admin/auth-allowlist`
+- `DELETE /api/v1/admin/auth-allowlist/{email}`
 
 ### API Examples
 

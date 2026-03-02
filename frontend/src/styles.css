@@ -1291,6 +1291,8 @@ button.danger.ghost {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .settings-row {
@@ -3048,6 +3050,16 @@ button.danger.ghost {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.manage-companies-panel {
+  width: min(980px, 92vw);
+}
+
+.manage-companies-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
 }
 
 .user-modal-panel {

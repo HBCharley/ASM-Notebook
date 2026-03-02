@@ -89,3 +89,13 @@ class ScanRateLimit(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class AuthAllowlist(Base):
+    __tablename__ = "auth_allowlist"
+    __table_args__ = (UniqueConstraint("email", name="uq_auth_allowlist_email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

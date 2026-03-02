@@ -81,4 +81,14 @@ export const api = {
   deleteScan: (slug, id) =>
     request(`/companies/${slug}/scans/${id}`, { method: "DELETE" }),
   getMe: () => request("/me"),
+  listAuthAllowlist: () => request("/admin/auth-allowlist"),
+  addAuthAllowlist: (payload) =>
+    request("/admin/auth-allowlist", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  deleteAuthAllowlist: (email) =>
+    request(`/admin/auth-allowlist/${encodeURIComponent(email)}`, {
+      method: "DELETE",
+    }),
 };

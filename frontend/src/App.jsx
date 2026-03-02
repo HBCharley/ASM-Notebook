@@ -1929,9 +1929,12 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
+  const [manageCompaniesOpen, setManageCompaniesOpen] = useState(false);
   const [maxLabelCap, setMaxLabelCap] = useState(36);
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerDomain, setNewCustomerDomain] = useState("");
+  const [adminCustomerName, setAdminCustomerName] = useState("");
+  const [adminCustomerDomain, setAdminCustomerDomain] = useState("");
   const [addDomainInput, setAddDomainInput] = useState("");
   const [renameInput, setRenameInput] = useState("");
   const [scanInFlight, setScanInFlight] = useState(false);
@@ -1966,6 +1969,10 @@ export default function App() {
     () => window.localStorage.getItem(ACTIVE_USER_KEY) || ""
   );
   const [userError, setUserError] = useState("");
+  const [authAllowlist, setAuthAllowlist] = useState([]);
+  const [authAllowEmail, setAuthAllowEmail] = useState("");
+  const [authAllowRole, setAuthAllowRole] = useState("user");
+  const [authAllowError, setAuthAllowError] = useState("");
   const [newUserName, setNewUserName] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRole, setNewUserRole] = useState("standard");
@@ -2478,6 +2485,47 @@ export default function App() {
     setStoredCompanyGroups(nextCompanyGroups);
   }
 
+  async function loadAuthAllowlist() {
+    if (!isAdmin) return;
+    setAuthAllowError("");
+    try {
+      const data = await api.listAuthAllowlist();
+      setAuthAllowlist(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setAuthAllowError(err?.message || "Failed to load allowlist.");
+    }
+  }
+
+  async function handleAddAuthAllowlist() {
+    if (!authAllowEmail.trim()) {
+      setAuthAllowError("Email is required.");
+      return;
+    }
+    setAuthAllowError("");
+    try {
+      const payload = {
+        email: authAllowEmail.trim(),
+        role: authAllowRole,
+      };
+      await api.addAuthAllowlist(payload);
+      setAuthAllowEmail("");
+      await loadAuthAllowlist();
+    } catch (err) {
+      setAuthAllowError(err?.message || "Failed to add email.");
+    }
+  }
+
+  async function handleRemoveAuthAllowlist(email) {
+    if (!confirm(`Remove ${email} from allowlist?`)) return;
+    setAuthAllowError("");
+    try {
+      await api.deleteAuthAllowlist(email);
+      await loadAuthAllowlist();
+    } catch (err) {
+      setAuthAllowError(err?.message || "Failed to remove email.");
+    }
+  }
+
   function handleCompanyGroupChange(slug, nextGroupId) {
     if (!slug || !nextGroupId) return;
     const next = { ...companyGroups, [slug]: nextGroupId };
@@ -2549,7 +2597,11 @@ export default function App() {
     setSwitchUserId(activeUserId || "");
     setUserError("");
     setEditingUserId("");
-  }, [userModalOpen, activeUserId]);
+    setAuthAllowError("");
+    if (isAdmin) {
+      loadAuthAllowlist();
+    }
+  }, [userModalOpen, activeUserId, isAdmin]);
 
   useEffect(() => {
     if (!artifacts) {
@@ -3608,9 +3660,84 @@ export default function App() {
             ) : null}
             {isAdmin ? (
               <div className="settings-row">
-                <div className="panel-header">
-                  <h3>Manage companies</h3>
+                <div className="settings-toggle">
+                  <div>
+                    <div className="settings-label">Admin tools</div>
+                    <div className="muted">Manage companies and auth access.</div>
+                  </div>
+                  <div className="settings-actions">
+                    <button className="ghost" onClick={() => setManageCompaniesOpen(true)}>
+                      Manage companies
+                    </button>
+                    <button className="ghost" onClick={() => setUserModalOpen(true)}>
+                      Manage users
+                    </button>
+                  </div>
                 </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {manageCompaniesOpen && isAdmin ? (
+        <div className="modal-backdrop" onClick={() => setManageCompaniesOpen(false)}>
+          <div
+            className="modal-panel manage-companies-panel"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="panel-header">
+              <div>
+                <h2>Manage companies</h2>
+                <div className="muted">Add new customers and assign groups.</div>
+              </div>
+              <button className="ghost" onClick={() => setManageCompaniesOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="manage-companies-grid">
+              <section className="panel">
+                <h3>Add company</h3>
+                <label>
+                  Name
+                  <input
+                    value={adminCustomerName}
+                    onChange={(e) => setAdminCustomerName(e.target.value)}
+                    placeholder="Acme Corp"
+                  />
+                </label>
+                <label>
+                  Domain
+                  <input
+                    value={adminCustomerDomain}
+                    onChange={(e) => setAdminCustomerDomain(e.target.value)}
+                    placeholder="example.com"
+                  />
+                </label>
+                <button
+                  onClick={() =>
+                    runWithStatus(async () => {
+                      await createCustomerFromHeader({
+                        newCustomerName: adminCustomerName,
+                        newCustomerDomain: adminCustomerDomain,
+                        allCompanies,
+                        activeUser,
+                        groups,
+                        companyGroups,
+                        setStoredCompanyGroups,
+                        setStoredGroups,
+                        setNewCustomerName: setAdminCustomerName,
+                        setNewCustomerDomain: setAdminCustomerDomain,
+                        loadCompanies,
+                        setSelectedCustomer,
+                      });
+                    })
+                  }
+                >
+                  Create
+                </button>
+              </section>
+              <section className="panel">
+                <h3>Company groups</h3>
                 <div className="settings-company-list">
                   {allCompanies.length ? (
                     allCompanies.map((company) => (
@@ -3640,8 +3767,8 @@ export default function App() {
                     <div className="muted">No companies available.</div>
                   )}
                 </div>
-              </div>
-            ) : null}
+              </section>
+            </div>
           </div>
         </div>
       ) : null}
@@ -3787,6 +3914,52 @@ export default function App() {
                       ))
                     ) : (
                       <div className="muted">No users yet.</div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <h3>Authentication allowlist</h3>
+                  <div className="muted">
+                    Emails listed here can authenticate via Google. Env allowlists
+                    still apply.
+                  </div>
+                  {authAllowError ? (
+                    <div className="user-error">{authAllowError}</div>
+                  ) : null}
+                  <div className="row">
+                    <input
+                      value={authAllowEmail}
+                      onChange={(e) => setAuthAllowEmail(e.target.value)}
+                      placeholder="user@gmail.com"
+                    />
+                    <select
+                      value={authAllowRole}
+                      onChange={(e) => setAuthAllowRole(e.target.value)}
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button onClick={handleAddAuthAllowlist}>Add</button>
+                  </div>
+                  <div className="user-list">
+                    {authAllowlist.length ? (
+                      authAllowlist.map((entry) => (
+                        <div key={entry.email} className="user-row">
+                          <div>
+                            <div className="user-name">{entry.email}</div>
+                            <div className="muted">{entry.role}</div>
+                          </div>
+                          <button
+                            className="danger ghost"
+                            onClick={() => handleRemoveAuthAllowlist(entry.email)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="muted">No allowlist entries yet.</div>
                     )}
                   </div>
                 </section>

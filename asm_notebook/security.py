@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -7,6 +8,12 @@ from typing import Any
 from fastapi import HTTPException, Request
 from google.auth.transport import requests as grequests
 from google.oauth2 import id_token
+from sqlalchemy import select
+
+from .db import SessionLocal
+from .models import AuthAllowlist
+
+logger = logging.getLogger("asm_notebook.auth")
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,19 @@ def _role_for_email(email: str | None) -> str:
         return "admin"
     if email in user_emails():
         return "user"
+    try:
+        with SessionLocal() as session:
+            entry = (
+                session.execute(
+                    select(AuthAllowlist).where(AuthAllowlist.email == email)
+                )
+                .scalars()
+                .first()
+            )
+            if entry:
+                return entry.role
+    except Exception:
+        logger.warning("Auth allowlist lookup failed", exc_info=True)
     return "public"
 
 
