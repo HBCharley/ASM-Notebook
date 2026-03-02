@@ -568,7 +568,19 @@ def _compute_exposure_score(row: dict[str, Any]) -> tuple[int, list[str]]:
 
 
 def _cve_findings(reported_versions: list[dict[str, str]]) -> list[dict[str, Any]]:
-    return find_cves(reported_versions or [])
+    timeout_seconds = _env_int("ASM_CVE_DOMAIN_TIMEOUT_SECONDS", 5)
+    if timeout_seconds <= 0:
+        return find_cves(reported_versions or [])
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(find_cves, reported_versions or [])
+        try:
+            return future.result(timeout=timeout_seconds)
+        except FutureTimeout:
+            logger.warning("CVE lookup timed out after %ss", timeout_seconds)
+            return []
+        except Exception:
+            logger.exception("CVE lookup failed")
+            return []
 
 
 def build_cve_debug(intel_rows: list[dict[str, Any]]) -> dict[str, Any]:
