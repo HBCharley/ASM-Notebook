@@ -117,6 +117,9 @@ def _tasks_config() -> dict[str, str]:
         "target_base": os.getenv("ASM_TASKS_TARGET_BASE", "").strip(),
         "emulator_host": os.getenv("CLOUD_TASKS_EMULATOR_HOST", "").strip(),
         "secret": os.getenv("ASM_TASKS_SECRET", "").strip(),
+        "dispatch_deadline": os.getenv(
+            "ASM_TASKS_DISPATCH_DEADLINE_SECONDS", "1800"
+        ).strip(),
     }
 
 
@@ -156,6 +159,12 @@ def _enqueue_scan_task(scan_id: int) -> None:
             "body": payload,
         }
     }
+    try:
+        deadline_seconds = int(cfg["dispatch_deadline"] or "1800")
+    except Exception:
+        deadline_seconds = 1800
+    if deadline_seconds > 0:
+        task["dispatch_deadline"] = {"seconds": deadline_seconds}
     if cfg["secret"]:
         task["http_request"]["headers"]["X-ASM-TASKS-SECRET"] = cfg["secret"]
     client.create_task(request={"parent": queue_path, "task": task})
