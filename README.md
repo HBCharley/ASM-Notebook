@@ -196,36 +196,74 @@ Required env vars:
 - `PUBLIC_COMPANY_SLUGS` (comma-separated; default `company-a,company-b`)
 - `ADMIN_SCAN_COOLDOWN_SECONDS` / `ADMIN_SCANS_PER_HOUR`
 - `USER_SCAN_COOLDOWN_SECONDS` / `USER_SCANS_PER_HOUR`
+- `ASM_TASKS_ENABLED=1` (enable Cloud Tasks for scans)
+- `ASM_TASKS_PROJECT` (GCP project id)
+- `ASM_TASKS_LOCATION` (Cloud Tasks region)
+- `ASM_TASKS_QUEUE` (queue name)
+- `ASM_TASKS_TARGET_BASE` (public service URL or custom domain)
+- `ASM_TASKS_SECRET` (shared secret for task calls)
+- `ASM_TASKS_DISPATCH_DEADLINE_SECONDS` (optional, default `1800`)
+- `ASM_CVE_TIMEOUT_SECONDS` (optional, default `30`)
+- `ASM_CVE_DOMAIN_TIMEOUT_SECONDS` (optional, default `5`)
+- `ASM_NVD_RETRY_SECONDS` (optional, default `600`)
+- `ASM_NVD_YEARS` (optional, default `1` or `2`)
 
-Build and deploy (example region `us-central1`):
+Choose a region close to your users (Cloud Tasks queue and Cloud Run region should match).
+
+### Build and Deploy (Cloud Build + Artifact Registry)
 
 ```powershell
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
-gcloud artifacts repositories create asm-notebook --repository-format=docker --location=us-central1
-gcloud builds submit --tag us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com cloudtasks.googleapis.com
+gcloud artifacts repositories create asm-notebook --repository-format=docker --location <REGION>
+
+# Build image with UI env baked in (required by Vite)
+gcloud builds submit --config cloudbuild.yaml --substitutions `
+  _VITE_GOOGLE_CLIENT_ID="<client-id>", `
+  _IMAGE="<REGION>-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-notebook:latest" `
+  .
+
+# Create Cloud Tasks queue
+gcloud tasks queues create scan-runner --location <REGION>
+
+# Deploy to Cloud Run
 gcloud run deploy asm-notebook `
-  --image us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest `
-  --region us-central1 `
+  --image <REGION>-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-notebook:latest `
+  --region <REGION> `
   --platform managed `
   --allow-unauthenticated `
-  --set-env-vars ASM_DATABASE_URL="<neon-connection-string>",ASM_CORS_ORIGINS="https://asm.cthomas.net",GOOGLE_OAUTH_CLIENT_ID="<client-id>",ADMIN_EMAILS="<admin1,admin2>",USER_EMAILS="<user1,user2>",PUBLIC_COMPANY_SLUGS="company-a,company-b"
+  --set-env-vars `
+    ASM_DATABASE_URL="<postgres-url>", `
+    ASM_CORS_ORIGINS="https://your-domain", `
+    GOOGLE_OAUTH_CLIENT_ID="<client-id>", `
+    ADMIN_EMAILS="<admin1,admin2>", `
+    USER_EMAILS="<user1,user2>", `
+    PUBLIC_COMPANY_SLUGS="company-a,company-b", `
+    ASM_TASKS_ENABLED=1, `
+    ASM_TASKS_PROJECT="$env:GOOGLE_CLOUD_PROJECT", `
+    ASM_TASKS_LOCATION="<REGION>", `
+    ASM_TASKS_QUEUE="scan-runner", `
+    ASM_TASKS_TARGET_BASE="https://your-domain", `
+    ASM_TASKS_SECRET="<generated-secret>", `
+    ASM_TASKS_DISPATCH_DEADLINE_SECONDS=1800, `
+    ASM_CVE_TIMEOUT_SECONDS=30, `
+    ASM_CVE_DOMAIN_TIMEOUT_SECONDS=5, `
+    ASM_NVD_RETRY_SECONDS=600, `
+    ASM_NVD_YEARS=1
 ```
 
-If you need to bake a Google client ID into the UI, build and push with Docker (build args are required for Vite):
+Grant Cloud Tasks enqueuer role to the Cloud Run service account:
 
 ```powershell
-gcloud auth configure-docker us-central1-docker.pkg.dev
-docker build -t us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest `
-  --build-arg VITE_GOOGLE_CLIENT_ID="<client-id>" `
-  --build-arg VITE_API_PREFIX="/api/v1" `
-  .
-docker push us-central1-docker.pkg.dev/$env:GOOGLE_CLOUD_PROJECT/asm-notebook/asm-allinone:latest
+gcloud run services describe asm-notebook --region <REGION> --format "value(spec.template.spec.serviceAccountName)"
+gcloud projects add-iam-policy-binding $env:GOOGLE_CLOUD_PROJECT `
+  --member "serviceAccount:<SERVICE_ACCOUNT_EMAIL>" `
+  --role "roles/cloudtasks.enqueuer"
 ```
 
 Domain mapping (high-level):
 
 ```powershell
-gcloud run domain-mappings create --service asm-notebook --domain asm.cthomas.net --region us-central1
+gcloud run domain-mappings create --service asm-notebook --domain your-domain --region <REGION>
 ```
 
 Security notes:
@@ -431,7 +469,8 @@ Invoke-RestMethod "http://127.0.0.1:8080/api/v1/companies/example/scans/by-numbe
 
 ### Standard Scan (Deep Scan off)
 
-1. `POST /api/v1/companies/{slug}/scans` creates a `ScanRun` row with status `running` and schedules background work.
+1. `POST /api/v1/companies/{slug}/scans` creates a `ScanRun` row with status `queued` and enqueues a Cloud Task.
+2. Cloud Task calls `POST /api/v1/tasks/run_scan` to execute the scan synchronously.
 2. Collect subdomains via Certificate Transparency (`crt.sh`).
 3. Scope-filter against root domains.
 4. Passive DNS resolution (A/AAAA/CNAME/MX/NS/TXT/CAA).
@@ -448,7 +487,7 @@ Invoke-RestMethod "http://127.0.0.1:8080/api/v1/companies/example/scans/by-numbe
 4. ASN enrichment + geo/org mapping for each IP.
 5. Reverse DNS per IP.
 6. Certificate parsing per host (SAN analysis).
-7. NVD/CVE correlation (only when version confidence is high).
+7. NVD/CVE correlation (only when version confidence is high), guarded by timeouts.
 8. Change detection across scans (diff + churn metrics).
 9. Exposure scoring with more features.
    - `whois` (RDAP for root domains)
@@ -508,11 +547,6 @@ poetry run python -m pytest -q
 
 - Python files are formatted with Black.
 - `.gitattributes` enforces LF line endings for source files to keep GitHub raw views readable.
-
-## Known Gaps
-
-- Service layer lives under `asm_notebook/services/`.
-- No external job queue yet (uses FastAPI background tasks; RQ/Celery would be better for concurrency/retries).
 
 ## Safety / Scope
 
