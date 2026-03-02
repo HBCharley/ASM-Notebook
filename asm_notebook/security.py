@@ -77,7 +77,13 @@ def _require_client_id() -> str:
 
 def _verify_token(token: str) -> dict[str, Any]:
     client_id = _require_client_id()
-    payload = id_token.verify_oauth2_token(token, grequests.Request(), client_id)
+    try:
+        payload = id_token.verify_oauth2_token(token, grequests.Request(), client_id)
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "unauthorized", "message": "Invalid or expired token"},
+        )
     if not payload:
         raise HTTPException(
             status_code=401,
