@@ -1930,6 +1930,7 @@ export default function App() {
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [manageCompaniesOpen, setManageCompaniesOpen] = useState(false);
+  const [manageGroupsOpen, setManageGroupsOpen] = useState(false);
   const [maxLabelCap, setMaxLabelCap] = useState(36);
   const [newCustomerName, setNewCustomerName] = useState("");
   const [newCustomerDomain, setNewCustomerDomain] = useState("");
@@ -1977,6 +1978,7 @@ export default function App() {
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserRole, setNewUserRole] = useState("standard");
   const [newUserGroupId, setNewUserGroupId] = useState("");
+  const [newGroupName, setNewGroupName] = useState("");
   const [newUserGroupChoice, setNewUserGroupChoice] = useState(
     groups[0] || NEW_GROUP_OPTION
   );
@@ -2485,6 +2487,18 @@ export default function App() {
     setStoredCompanyGroups(nextCompanyGroups);
   }
 
+  function handleAddGroup() {
+    const value = newGroupName.trim();
+    if (!value) return;
+    if (groups.includes(value)) {
+      setNewGroupName("");
+      return;
+    }
+    const next = [...groups, value];
+    setStoredGroups(next);
+    setNewGroupName("");
+  }
+
   async function loadAuthAllowlist() {
     if (!isAdmin) return;
     setAuthAllowError("");
@@ -2664,7 +2678,13 @@ export default function App() {
   }, [userModalDragging, userModalResizing]);
 
   useEffect(() => {
-    if (!settingsOpen && !userModalOpen && !customerModalOpen) {
+    if (
+      !settingsOpen &&
+      !userModalOpen &&
+      !customerModalOpen &&
+      !manageCompaniesOpen &&
+      !manageGroupsOpen
+    ) {
       return;
     }
     const onKeyDown = (event) => {
@@ -2672,10 +2692,18 @@ export default function App() {
       setSettingsOpen(false);
       setUserModalOpen(false);
       setCustomerModalOpen(false);
+      setManageCompaniesOpen(false);
+      setManageGroupsOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [settingsOpen, userModalOpen, customerModalOpen]);
+  }, [
+    settingsOpen,
+    userModalOpen,
+    customerModalOpen,
+    manageCompaniesOpen,
+    manageGroupsOpen,
+  ]);
 
   useEffect(() => {
     const slug = activeCompany?.slug;
@@ -3669,6 +3697,9 @@ export default function App() {
                     <button className="ghost" onClick={() => setManageCompaniesOpen(true)}>
                       Manage companies
                     </button>
+                    <button className="ghost" onClick={() => setManageGroupsOpen(true)}>
+                      Manage groups
+                    </button>
                     <button className="ghost" onClick={() => setUserModalOpen(true)}>
                       Manage users
                     </button>
@@ -3735,6 +3766,84 @@ export default function App() {
                 >
                   Create
                 </button>
+              </section>
+              <section className="panel">
+                <h3>Company groups</h3>
+                <div className="settings-company-list">
+                  {allCompanies.length ? (
+                    allCompanies.map((company) => (
+                      <div key={company.slug} className="settings-company-row">
+                        <div>
+                          <div className="settings-company-name">{company.name}</div>
+                          <div className="muted">{company.slug}</div>
+                        </div>
+                        <label className="settings-company-group">
+                          Group ID
+                          <select
+                            value={companyGroups[company.slug] || groups[0] || ""}
+                            onChange={(e) =>
+                              handleCompanyGroupChange(company.slug, e.target.value)
+                            }
+                          >
+                            {groups.map((groupId) => (
+                              <option key={groupId} value={groupId}>
+                                {groupId}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="muted">No companies available.</div>
+                  )}
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {manageGroupsOpen && isAdmin ? (
+        <div className="modal-backdrop" onClick={() => setManageGroupsOpen(false)}>
+          <div
+            className="modal-panel manage-companies-panel"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="panel-header">
+              <div>
+                <h2>Manage groups</h2>
+                <div className="muted">Create groups and assign companies.</div>
+              </div>
+              <button className="ghost" onClick={() => setManageGroupsOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="manage-companies-grid">
+              <section className="panel">
+                <h3>Create group</h3>
+                <label>
+                  Group ID
+                  <input
+                    value={newGroupName}
+                    onChange={(e) => setNewGroupName(e.target.value)}
+                    placeholder="engineering"
+                  />
+                </label>
+                <button onClick={handleAddGroup}>Create</button>
+                <h3 style={{ marginTop: "1.5rem" }}>Groups</h3>
+                <div className="group-list">
+                  {groups.map((groupId) => (
+                    <div key={groupId} className="group-row">
+                      <span>{groupId}</span>
+                      <button
+                        className="danger ghost"
+                        onClick={() => handleRemoveGroup(groupId)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </section>
               <section className="panel">
                 <h3>Company groups</h3>
