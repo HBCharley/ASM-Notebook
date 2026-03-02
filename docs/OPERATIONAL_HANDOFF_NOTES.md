@@ -6,20 +6,30 @@ Backend:
 
 - `ASM_DATABASE_URL`: required DB connection URL (PostgreSQL).
 - `ASM_TEST_MODE`: set to `1` for deterministic test-mode scans.
+- `ASM_TASKS_ENABLED`: enable Cloud Tasks dispatch.
+- `ASM_TASKS_PROJECT`: GCP project id.
+- `ASM_TASKS_LOCATION`: Cloud Tasks region.
+- `ASM_TASKS_QUEUE`: queue name.
+- `ASM_TASKS_TARGET_BASE`: public service URL or custom domain.
+- `ASM_TASKS_SECRET`: shared secret for task requests.
+- `ASM_TASKS_DISPATCH_DEADLINE_SECONDS`: optional, defaults to 1800.
+- `ASM_CVE_TIMEOUT_SECONDS`: optional, defaults to 30.
+- `ASM_CVE_DOMAIN_TIMEOUT_SECONDS`: optional, defaults to 5.
+- `ASM_NVD_RETRY_SECONDS`: optional, defaults to 600.
+- `ASM_NVD_YEARS`: optional, defaults to 1 or 2.
 
 Frontend:
 
 - `VITE_API_BASE`: optional API base URL (empty means same-origin/proxy in dev).
-- `VITE_BASIC_AUTH_USER`: optional basic auth username for API calls.
-- `VITE_BASIC_AUTH_PASS`: optional basic auth password for API calls.
+- `VITE_API_PREFIX`: optional API prefix (default `/api/v1`).
+- `VITE_GOOGLE_CLIENT_ID`: Google client id baked at build time (required for login).
 
-Cloud Build frontend substitution:
+Cloud Build substitutions:
 
-- `_VITE_API_BASE` in `dev-frontend.yaml` maps to Docker build arg `VITE_API_BASE`.
+- `cloudbuild.yaml` uses `_VITE_GOOGLE_CLIENT_ID` and `_IMAGE`.
 
 ## Accepted POC Gaps
 
-- Scan execution remains in-process (FastAPI background task / CLI runtime), no durable queue yet.
 - Runtime requires PostgreSQL; no local file-backed DB support.
 - API/CLI scan logic is not yet split into a service layer.
 

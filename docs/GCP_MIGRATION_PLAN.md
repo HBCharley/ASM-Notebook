@@ -4,14 +4,13 @@ This plan migrates the current local POC (FastAPI + React) to a production-ready
 
 ## Recommended Target Architecture
 
-- Backend API: Cloud Run service (`asm-api`)
-- Frontend: Cloud Run service (`asm-frontend`) or Firebase Hosting (optional later)
-- Database: Cloud SQL for PostgreSQL
-- Async scan execution: Cloud Tasks -> worker endpoint on Cloud Run (`asm-worker`)
-- Secrets: Secret Manager
-- Container registry: Artifact Registry
-- CI/CD: Cloud Build (or GitHub Actions deploying to Cloud Run)
-- Observability: Cloud Logging + Error Reporting + Cloud Monitoring alerts
+- Single Cloud Run service serving UI at `/` and API at `/api/v1` (all-in-one image).
+- Database: PostgreSQL (Cloud SQL or managed external like Neon).
+- Async scan execution: Cloud Tasks -> `/api/v1/tasks/run_scan` on the same Cloud Run service.
+- Secrets: Secret Manager or Cloud Run env vars (no secrets in repo).
+- Container registry: Artifact Registry.
+- CI/CD: Cloud Build (cloudbuild.yaml) or GitHub Actions deploying to Cloud Run.
+- Observability: Cloud Logging + Error Reporting + Cloud Monitoring alerts.
 
 ## Phase 1: Platform Foundation
 
@@ -25,14 +24,13 @@ This plan migrates the current local POC (FastAPI + React) to a production-ready
 
 ## Phase 2: Containerization and Config
 
-1. Add Dockerfiles:
-   - backend image (Uvicorn/FastAPI)
-   - frontend image (Vite build + static server)
+1. Use the all-in-one Dockerfile (frontend build + backend runtime).
 2. Move all env configuration to runtime env vars + Secret Manager:
    - DB connection string
+   - Cloud Tasks settings
    - external API/timeouts/retry knobs
-   - any auth credentials
-3. Keep local dev compatibility (`.env.local` + existing commands).
+   - auth credentials
+3. Keep local dev compatibility (`.env` + docker compose).
 4. Preserve frontend view modes (Standard / Executive / SOC Analyst) across environments.
 
 ## Phase 3: Database Migration (PostgreSQL)
@@ -45,15 +43,12 @@ This plan migrates the current local POC (FastAPI + React) to a production-ready
 
 ## Phase 4: Async Scan Execution Hardening
 
-Current FastAPI background tasks are fine for local POC but not durable for cloud scale.
+Cloud Tasks is now the default async scan execution path.
 
-1. Replace in-process background execution with Cloud Tasks queue.
-2. Worker endpoint:
-   - receives scan job payload
-   - executes scan pipeline
-   - updates scan status/progress (`notes`) in DB
-3. Add idempotency guard for duplicated task delivery.
-4. Add retry policy and dead-letter strategy.
+1. Queue: `scan-runner` in the same region as Cloud Run.
+2. Worker endpoint: `POST /api/v1/tasks/run_scan`.
+3. Ensure task authentication via `ASM_TASKS_SECRET`.
+4. Add retry/dead-letter policy as needed for production.
 
 ## Phase 5: Security Baseline
 
@@ -70,7 +65,7 @@ Current FastAPI background tasks are fine for local POC but not durable for clou
    - frontend build
    - lint/static checks
 2. CD flow:
-   - build images
+   - build images (cloudbuild.yaml)
    - push to Artifact Registry
    - deploy to Cloud Run
 3. Add per-environment config and approval gate for `prod`.
