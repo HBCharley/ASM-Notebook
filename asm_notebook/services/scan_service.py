@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import os
@@ -26,6 +27,7 @@ from .company_service import normalize_domain
 from .cve_service import find_cves
 
 _CANCELLED_SCANS: set[int] = set()
+logger = logging.getLogger("asm_notebook.scan")
 
 
 class ScanCancelled(Exception):
@@ -990,11 +992,35 @@ async def _collect_scan_data(
             cname_resolves[str(cname).lower()] = True
 
     progress_cb(2, 6, f"Collecting HTTP metadata for {len(resolvable_domains)} domains")
+    logger.info(
+        "HTTP metadata start domains=%s deep_scan=%s",
+        len(resolvable_domains),
+        deep_scan,
+    )
     web_records = []
+    slow_threshold = _env_int("ASM_HTTP_SLOW_SECONDS", 5)
+    t_http_total = perf_counter()
     for domain in resolvable_domains:
         if cancel_check():
             raise ScanCancelled()
-        web_records.append(await fetch_http_metadata(domain, deep_scan=deep_scan))
+        t_domain = perf_counter()
+        record = await fetch_http_metadata(domain, deep_scan=deep_scan)
+        duration = perf_counter() - t_domain
+        if duration >= slow_threshold:
+            logger.info(
+                "HTTP metadata slow domain=%s seconds=%.2f",
+                domain,
+                duration,
+            )
+        if record and not record.get("reachable", True):
+            logger.info("HTTP metadata unreachable domain=%s", domain)
+        web_records.append(record)
+    logger.info(
+        "HTTP metadata complete domains=%s reachable=%s seconds=%.2f",
+        len(web_records),
+        sum(1 for r in web_records if r.get("reachable")),
+        perf_counter() - t_http_total,
+    )
 
     progress_cb(2, 6, "Resolving root wildcards")
     wildcard_roots: dict[str, bool] = {}
@@ -1078,6 +1104,12 @@ def _execute_scan(
     roots_set = set(roots)
     timings: dict[str, float] = {}
     t0 = perf_counter()
+    logger.info(
+        "Scan start id=%s roots=%s deep_scan=%s",
+        scan_id,
+        len(roots_set),
+        deep_scan,
+    )
 
     def set_progress(step: int, total: int, message: str) -> None:
         with SessionLocal() as s:
@@ -1128,6 +1160,12 @@ def _execute_scan(
                 )
             )
             timings["ct_dns_http_seconds"] = round(perf_counter() - t_step, 3)
+        logger.info(
+            "Scan data collected id=%s domains=%s resolvable=%s",
+            scan_id,
+            len(domains_sorted),
+            len(resolvable_domains),
+        )
 
         if _is_cancelled(scan_id):
             return
@@ -1183,6 +1221,7 @@ def _execute_scan(
             )
             s.commit()
             timings["persist_dns_seconds"] = round(perf_counter() - t_step, 3)
+            logger.info("Scan persisted dns id=%s", scan_id)
 
             if _is_cancelled(scan_id):
                 return
@@ -1202,6 +1241,7 @@ def _execute_scan(
             )
             s.commit()
             timings["persist_web_seconds"] = round(perf_counter() - t_step, 3)
+            logger.info("Scan persisted web id=%s", scan_id)
 
             if _is_cancelled(scan_id):
                 return
@@ -1269,6 +1309,7 @@ def _execute_scan(
                 for d in domains_sorted
             ]
             timings["intel_build_seconds"] = round(perf_counter() - t_intel, 3)
+            logger.info("Scan intel built id=%s domains=%s", scan_id, len(domains_sorted))
             cve_debug = build_cve_debug(intel_rows)
             prev_intel_rows: list[dict[str, Any]] | None = None
             prev_scan = s.execute(
@@ -1310,6 +1351,7 @@ def _execute_scan(
             scan.completed_at = _now_utc()
             scan.notes = "6/6 Scan complete"
             s.commit()
+        logger.info("Scan complete id=%s total_seconds=%.2f", scan_id, perf_counter() - t0)
     except ScanCancelled:
         with SessionLocal() as s:
             scan = s.get(ScanRun, scan_id)
@@ -1318,6 +1360,7 @@ def _execute_scan(
                 scan.completed_at = _now_utc()
                 scan.notes = "Scan cancelled"
                 s.commit()
+        logger.info("Scan cancelled id=%s", scan_id)
     except Exception as e:
         with SessionLocal() as s:
             scan = s.get(ScanRun, scan_id)
@@ -1326,6 +1369,7 @@ def _execute_scan(
                 scan.completed_at = _now_utc()
                 scan.notes = str(e)[:250]
                 s.commit()
+        logger.exception("Scan failed id=%s", scan_id)
     finally:
         _CANCELLED_SCANS.discard(scan_id)
 
