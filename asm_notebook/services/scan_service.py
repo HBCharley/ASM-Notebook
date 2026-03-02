@@ -166,7 +166,7 @@ def _enqueue_scan_task(scan_id: int) -> None:
     if deadline_seconds > 0:
         task["dispatch_deadline"] = {"seconds": deadline_seconds}
     if cfg["secret"]:
-        task["http_request"]["headers"]["X-ASM-TASKS-SECRET"] = cfg["secret"]
+        task["http_request"]["headers"]["X-Tasks-Secret"] = cfg["secret"]
     client.create_task(request={"parent": queue_path, "task": task})
 
 

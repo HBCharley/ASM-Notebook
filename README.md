@@ -266,6 +266,11 @@ Domain mapping (high-level):
 gcloud run domain-mappings create --service asm-notebook --domain your-domain --region <REGION>
 ```
 
+Security note (production):
+
+- Do not deploy Cloud Run with `--allow-unauthenticated`.
+- Always set `GOOGLE_OAUTH_CLIENT_ID`, `ASM_TASKS_SECRET`, and explicit `ASM_CORS_ORIGINS`.
+
 Security notes:
 
 - Use least-privilege DB credentials.

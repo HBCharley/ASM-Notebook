@@ -28,6 +28,7 @@ app = FastAPI(
     redoc_url="/api/v1/redoc",
     openapi_url="/api/v1/openapi.json",
 )
+_PUBLIC_PATHS = {"/api/v1/tasks/run_scan"}
 router = APIRouter()
 
 
@@ -48,6 +49,40 @@ def _cors_origins() -> list[str]:
         "http://127.0.0.1:8080",
         "http://localhost:8080",
     ]
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if raw == "":
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _demo_mode() -> bool:
+    return _env_bool("DEMO_MODE", False)
+
+
+def _tasks_enabled() -> bool:
+    if os.getenv("ENABLE_TASKS") is not None:
+        return _env_bool("ENABLE_TASKS", False)
+    return _env_bool("ASM_TASKS_ENABLED", False)
+
+
+def _validate_startup_config() -> None:
+    demo = _demo_mode()
+    client_id = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    if not demo and not client_id:
+        raise RuntimeError("GOOGLE_OAUTH_CLIENT_ID must be set unless DEMO_MODE=true")
+
+    if _tasks_enabled() and not os.getenv("ASM_TASKS_SECRET", "").strip():
+        raise RuntimeError("ASM_TASKS_SECRET must be set when ENABLE_TASKS=true")
+
+    if not demo:
+        raw = os.getenv("ASM_CORS_ORIGINS", "").strip()
+        if not raw or "*" in {o.strip() for o in raw.split(",")}:
+            raise RuntimeError(
+                "ASM_CORS_ORIGINS must be explicitly set for production (no '*')"
+            )
 
 
 app.add_middleware(
@@ -88,6 +123,7 @@ class TaskRunScan(BaseModel):
 
 @app.on_event("startup")
 def _startup() -> None:
+    _validate_startup_config()
     init_db()
 
 
@@ -119,12 +155,32 @@ def _scan_limits(role: str) -> dict[str, int]:
 def _require_task_secret(request: Request) -> None:
     secret = os.getenv("ASM_TASKS_SECRET", "").strip()
     if not secret:
-        return
-    header = request.headers.get("X-ASM-TASKS-SECRET", "")
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "forbidden",
+                "message": "ASM_TASKS_SECRET is required for task execution",
+            },
+        )
+    header = request.headers.get("X-Tasks-Secret", "")
     if header != secret:
         raise HTTPException(
             status_code=403,
             detail={"error": "forbidden", "message": "Invalid task secret"},
+        )
+
+
+def _require_auth_if_needed(
+    request: Request, principal: Principal = Depends(get_principal)
+) -> None:
+    if _demo_mode():
+        return
+    if request.url.path in _PUBLIC_PATHS:
+        return
+    if not principal.authenticated:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": "unauthorized", "message": "Authentication required"},
         )
 
 
@@ -528,7 +584,7 @@ def delete_company_scan(
     scan_service.delete_company_scan(slug, scan_id)
 
 
-app.include_router(router, prefix="/api/v1")
+app.include_router(router, prefix="/api/v1", dependencies=[Depends(_require_auth_if_needed)])
 
 
 def _resolve_dist_dir() -> Path | None:
