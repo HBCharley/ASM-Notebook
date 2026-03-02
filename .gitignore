@@ -52,3 +52,9 @@ build/
 .env
 .env.*
 !.env.docker.example
+
+# Local tooling artifacts
+.agents/
+skills-lock.json
+INFO
+
