@@ -6,12 +6,15 @@ Backend:
 
 - `ASM_DATABASE_URL`: required DB connection URL (PostgreSQL).
 - `ASM_TEST_MODE`: set to `1` for deterministic test-mode scans.
+- `DEMO_MODE`: set to `true` for local demos without OAuth (default `false`).
+- `GOOGLE_OAUTH_CLIENT_ID`: required when `DEMO_MODE=false` (startup fails otherwise).
 - `ASM_TASKS_ENABLED`: enable Cloud Tasks dispatch.
+- `ENABLE_TASKS`: preferred boolean flag for Cloud Tasks (takes precedence if set).
 - `ASM_TASKS_PROJECT`: GCP project id.
 - `ASM_TASKS_LOCATION`: Cloud Tasks region.
 - `ASM_TASKS_QUEUE`: queue name.
 - `ASM_TASKS_TARGET_BASE`: public service URL or custom domain.
-- `ASM_TASKS_SECRET`: shared secret for task requests.
+- `ASM_TASKS_SECRET`: shared secret for task requests (required when tasks are enabled).
 - `ASM_TASKS_DISPATCH_DEADLINE_SECONDS`: optional, defaults to 1800.
 - `ASM_CVE_TIMEOUT_SECONDS`: optional, defaults to 30.
 - `ASM_CVE_DOMAIN_TIMEOUT_SECONDS`: optional, defaults to 5.

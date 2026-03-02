@@ -52,7 +52,8 @@ Cloud Tasks is now the default async scan execution path.
 
 ## Phase 5: Security Baseline
 
-1. Put API behind authenticated access (IAP, JWT, or API gateway model).
+1. Put API behind authenticated access (OIDC/JWT, IAP, or API gateway model).
+   - `DEMO_MODE=false` requires `GOOGLE_OAUTH_CLIENT_ID` at startup.
 2. Restrict ingress as needed (internal + LB or public with auth).
 3. Enforce HTTPS-only endpoints.
 4. Rotate secrets via Secret Manager.

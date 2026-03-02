@@ -43,6 +43,9 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Admins can add authenticated users via the database-backed auth allowlist (see Admin tools),
   which supplements the env allowlists above.
 - Keep at least one admin in `ADMIN_EMAILS` so you can always regain access.
+- Production hardening:
+  - `DEMO_MODE=false` (default) requires `GOOGLE_OAUTH_CLIENT_ID` or the app will refuse to start.
+  - `DEMO_MODE=true` is intended for local demos without OAuth.
 
 Use `GET /api/v1/me` to see the effective role and limits.
 
@@ -155,6 +158,8 @@ docker compose up --build
 Notes:
 
 - Set `ASM_DATABASE_URL` in `.env` (no credentials are stored in the repo).
+- If you are not configuring Google OAuth locally, set `DEMO_MODE=true` in `.env` (otherwise startup fails).
+- If tasks are enabled (`ENABLE_TASKS=1` or `ASM_TASKS_ENABLED=1`), `ASM_TASKS_SECRET` is required.
 
 Health check:
 
@@ -190,18 +195,19 @@ Required env vars:
 - `ASM_DATABASE_URL` (PostgreSQL URL, include `sslmode=require`)
 - `ASM_CORS_ORIGINS` (comma-separated allowed origins, default to `https://asm.cthomas.net` for the demo)
 - `ASM_TEST_MODE` (optional, default `0`)
+- `DEMO_MODE` (default `false`; keep `false` in production)
 - `GOOGLE_OAUTH_CLIENT_ID` (Google OAuth client ID for ID token verification)
 - `ADMIN_EMAILS` (comma-separated)
 - `USER_EMAILS` (comma-separated)
 - `PUBLIC_COMPANY_SLUGS` (comma-separated; default `company-a,company-b`)
 - `ADMIN_SCAN_COOLDOWN_SECONDS` / `ADMIN_SCANS_PER_HOUR`
 - `USER_SCAN_COOLDOWN_SECONDS` / `USER_SCANS_PER_HOUR`
-- `ASM_TASKS_ENABLED=1` (enable Cloud Tasks for scans)
+- `ENABLE_TASKS=1` (preferred) or `ASM_TASKS_ENABLED=1` (enable Cloud Tasks for scans)
 - `ASM_TASKS_PROJECT` (GCP project id)
 - `ASM_TASKS_LOCATION` (Cloud Tasks region)
 - `ASM_TASKS_QUEUE` (queue name)
 - `ASM_TASKS_TARGET_BASE` (public service URL or custom domain)
-- `ASM_TASKS_SECRET` (shared secret for task calls)
+- `ASM_TASKS_SECRET` (shared secret for task calls; required when tasks are enabled)
 - `ASM_TASKS_DISPATCH_DEADLINE_SECONDS` (optional, default `1800`)
 - `ASM_CVE_TIMEOUT_SECONDS` (optional, default `30`)
 - `ASM_CVE_DOMAIN_TIMEOUT_SECONDS` (optional, default `5`)
@@ -237,7 +243,7 @@ gcloud run deploy asm-notebook `
     ADMIN_EMAILS="<admin1,admin2>", `
     USER_EMAILS="<user1,user2>", `
     PUBLIC_COMPANY_SLUGS="company-a,company-b", `
-    ASM_TASKS_ENABLED=1, `
+    ENABLE_TASKS=1, `
     ASM_TASKS_PROJECT="$env:GOOGLE_CLOUD_PROJECT", `
     ASM_TASKS_LOCATION="<REGION>", `
     ASM_TASKS_QUEUE="scan-runner", `
@@ -268,7 +274,8 @@ gcloud run domain-mappings create --service asm-notebook --domain your-domain --
 Security note (production):
 
 - Do not deploy Cloud Run with `--allow-unauthenticated`. Use authenticated invokers only.
-- Always set `GOOGLE_OAUTH_CLIENT_ID`, `ASM_TASKS_SECRET`, and explicit `ASM_CORS_ORIGINS`.
+- Keep `DEMO_MODE=false` and always set `GOOGLE_OAUTH_CLIENT_ID`, `ASM_TASKS_SECRET` (when tasks enabled),
+  and explicit `ASM_CORS_ORIGINS`.
 
 Security notes:
 
@@ -350,6 +357,7 @@ Notes:
   - Settings includes admin-only buttons:
     - `Manage companies` opens a modal to add companies and set group assignment
     - `Manage users` opens the admin panel (including auth allowlist for Google login)
+    - `Manage groups` opens a modal to create groups and assign companies
   - Standard users only see companies assigned to their group
 
 ## CLI
