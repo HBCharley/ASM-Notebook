@@ -12,7 +12,12 @@ from time import perf_counter
 from typing import Any, Callable
 
 import httpx
+import grpc
 from fastapi import BackgroundTasks, HTTPException
+from google.cloud import tasks_v2
+from google.cloud.tasks_v2.services.cloud_tasks.transports import (
+    CloudTasksGrpcTransport,
+)
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -80,13 +85,80 @@ def _scan_limits(role: str) -> dict[str, int]:
         return {
             "cooldown_seconds": _env_int("ADMIN_SCAN_COOLDOWN_SECONDS", 300),
             "scans_per_hour": _env_int("ADMIN_SCANS_PER_HOUR", 20),
+            "running_stale_seconds": _env_int(
+                "ADMIN_SCAN_RUNNING_STALE_SECONDS",
+                _env_int("ASM_SCAN_RUNNING_STALE_SECONDS", 1800),
+            ),
         }
     if role == "user":
         return {
             "cooldown_seconds": _env_int("USER_SCAN_COOLDOWN_SECONDS", 1800),
             "scans_per_hour": _env_int("USER_SCANS_PER_HOUR", 2),
+            "running_stale_seconds": _env_int(
+                "USER_SCAN_RUNNING_STALE_SECONDS",
+                _env_int("ASM_SCAN_RUNNING_STALE_SECONDS", 1800),
+            ),
         }
-    return {"cooldown_seconds": 0, "scans_per_hour": 0}
+    return {
+        "cooldown_seconds": 0,
+        "scans_per_hour": 0,
+        "running_stale_seconds": _env_int("ASM_SCAN_RUNNING_STALE_SECONDS", 1800),
+    }
+
+
+def _tasks_config() -> dict[str, str]:
+    return {
+        "enabled": os.getenv("ASM_TASKS_ENABLED", "0").strip(),
+        "project": os.getenv("ASM_TASKS_PROJECT", "local").strip() or "local",
+        "location": os.getenv("ASM_TASKS_LOCATION", "asia-southeast1").strip()
+        or "asia-southeast1",
+        "queue": os.getenv("ASM_TASKS_QUEUE", "scan-runner").strip()
+        or "scan-runner",
+        "target_base": os.getenv("ASM_TASKS_TARGET_BASE", "").strip(),
+        "emulator_host": os.getenv("CLOUD_TASKS_EMULATOR_HOST", "").strip(),
+        "secret": os.getenv("ASM_TASKS_SECRET", "").strip(),
+    }
+
+
+def _tasks_client(cfg: dict[str, str]) -> tasks_v2.CloudTasksClient:
+    if cfg["emulator_host"]:
+        channel = grpc.insecure_channel(cfg["emulator_host"])
+        transport = CloudTasksGrpcTransport(channel=channel)
+        return tasks_v2.CloudTasksClient(transport=transport)
+    return tasks_v2.CloudTasksClient()
+
+
+def _ensure_tasks_queue(client: tasks_v2.CloudTasksClient, cfg: dict[str, str]) -> str:
+    parent = f"projects/{cfg['project']}/locations/{cfg['location']}"
+    queue_path = f"{parent}/queues/{cfg['queue']}"
+    try:
+        client.get_queue(request={"name": queue_path})
+    except Exception:
+        client.create_queue(request={"parent": parent, "queue": {"name": queue_path}})
+    return queue_path
+
+
+def _enqueue_scan_task(scan_id: int) -> None:
+    cfg = _tasks_config()
+    if cfg["enabled"] != "1":
+        raise HTTPException(status_code=500, detail="Task queue not configured")
+    if not cfg["target_base"]:
+        raise HTTPException(status_code=500, detail="ASM_TASKS_TARGET_BASE missing")
+    client = _tasks_client(cfg)
+    queue_path = _ensure_tasks_queue(client, cfg)
+    url = f"{cfg['target_base'].rstrip('/')}/api/v1/tasks/run_scan"
+    payload = json.dumps({"scan_id": scan_id}).encode("utf-8")
+    task: dict[str, Any] = {
+        "http_request": {
+            "http_method": tasks_v2.HttpMethod.POST,
+            "url": url,
+            "headers": {"Content-Type": "application/json"},
+            "body": payload,
+        }
+    }
+    if cfg["secret"]:
+        task["http_request"]["headers"]["X-ASM-TASKS-SECRET"] = cfg["secret"]
+    client.create_task(request={"parent": queue_path, "task": task})
 
 
 def _hour_bucket(now: datetime) -> datetime:
@@ -119,6 +191,7 @@ def _enforce_scan_limits(
     limits = _scan_limits(principal.role)
     cooldown_seconds = limits["cooldown_seconds"]
     scans_per_hour = limits["scans_per_hour"]
+    running_stale_seconds = limits.get("running_stale_seconds", 1800)
 
     running_scan = (
         s.execute(
@@ -133,10 +206,23 @@ def _enforce_scan_limits(
         .first()
     )
     if running_scan:
-        raise _rate_limited(
-            "Scan already running for this company.",
-            retry_after_seconds=60,
+        last_heartbeat = _as_utc(running_scan.heartbeat_at) or _as_utc(
+            running_scan.started_at
         )
+        if last_heartbeat:
+            age_seconds = (now - last_heartbeat).total_seconds()
+        else:
+            age_seconds = 0
+        if running_stale_seconds > 0 and age_seconds > running_stale_seconds:
+            running_scan.status = "failed"
+            running_scan.completed_at = _now_utc()
+            running_scan.notes = "Scan marked failed due to stale heartbeat"
+            s.commit()
+        else:
+            raise _rate_limited(
+                "Scan already running for this company.",
+                retry_after_seconds=60,
+            )
 
     if cooldown_seconds > 0:
         company_key = str(company.id)
@@ -1118,6 +1204,7 @@ def _execute_scan(
             if not scan:
                 return
             scan.notes = f"{step}/{total} {message}"[:250]
+            scan.heartbeat_at = _now_utc()
             s.commit()
 
     try:
@@ -1404,8 +1491,8 @@ def trigger_scan(
             scan = ScanRun(
                 company_id=company.id,
                 company_scan_number=next_num,
-                status="running",
-                started_at=_now_utc(),
+                status="queued",
+                notes="1/6 Queued",
             )
             s.add(scan)
             s.flush()
@@ -1424,17 +1511,58 @@ def trigger_scan(
                 )
             )
 
-    background_tasks.add_task(
-        _execute_scan,
-        scan_id,
-        sorted(roots),
-        deep_scan,
-    )
+    _enqueue_scan_task(scan_id)
     return {
         "company_slug": slug,
         "scan_id": scan_id,
         "company_scan_number": scan_number,
-        "status": "running",
+        "status": "queued",
+    }
+
+
+def _scan_is_deep(s: Session, scan_id: int) -> bool:
+    meta = s.execute(
+        select(ScanArtifact).where(
+            ScanArtifact.scan_id == scan_id,
+            ScanArtifact.artifact_type == "scan_meta",
+        )
+    ).scalar_one_or_none()
+    if not meta:
+        return False
+    try:
+        payload = json.loads(meta.json_text)
+        return bool(payload.get("deep_scan"))
+    except Exception:
+        return False
+
+
+def run_scan_task(scan_id: int) -> None:
+    with SessionLocal() as s:
+        scan = s.get(ScanRun, scan_id)
+        if not scan:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        if scan.status in {"running", "success", "failed", "cancelled"}:
+            return
+        scan.status = "running"
+        scan.started_at = _now_utc()
+        scan.heartbeat_at = _now_utc()
+        scan.notes = "1/6 Scan started"
+        s.commit()
+        roots = [d.domain for d in scan.company.domains]
+        deep_scan = _scan_is_deep(s, scan_id)
+    _execute_scan(scan_id, roots, deep_scan=deep_scan)
+
+
+def tasks_status() -> dict[str, Any]:
+    cfg = _tasks_config()
+    return {
+        "enabled": cfg["enabled"] == "1",
+        "project": cfg["project"],
+        "location": cfg["location"],
+        "queue": cfg["queue"],
+        "target_base": cfg["target_base"],
+        "emulator_host": cfg["emulator_host"],
+        "secret_set": bool(cfg["secret"]),
     }
 
 

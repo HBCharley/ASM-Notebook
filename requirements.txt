@@ -12,3 +12,4 @@ ipwhois
 cryptography
 google-auth
 requests
+google-cloud-tasks

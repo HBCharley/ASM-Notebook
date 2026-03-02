@@ -29,6 +29,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      tasks:
+        condition: service_started
     environment:
       ASM_DATABASE_URL: ${ASM_DATABASE_URL}
       ASM_CORS_ORIGINS: ${ASM_CORS_ORIGINS:-}
@@ -41,6 +43,13 @@ services:
       ADMIN_SCANS_PER_HOUR: ${ADMIN_SCANS_PER_HOUR:-20}
       USER_SCAN_COOLDOWN_SECONDS: ${USER_SCAN_COOLDOWN_SECONDS:-1800}
       USER_SCANS_PER_HOUR: ${USER_SCANS_PER_HOUR:-2}
+      ASM_TASKS_ENABLED: ${ASM_TASKS_ENABLED:-1}
+      ASM_TASKS_PROJECT: ${ASM_TASKS_PROJECT:-local}
+      ASM_TASKS_LOCATION: ${ASM_TASKS_LOCATION:-asia-southeast1}
+      ASM_TASKS_QUEUE: ${ASM_TASKS_QUEUE:-scan-runner}
+      ASM_TASKS_TARGET_BASE: ${ASM_TASKS_TARGET_BASE:-http://app:8080}
+      CLOUD_TASKS_EMULATOR_HOST: ${CLOUD_TASKS_EMULATOR_HOST:-tasks:8123}
+      ASM_TASKS_SECRET: ${ASM_TASKS_SECRET:-}
     ports:
       - "8080:8080"
     volumes:
@@ -55,6 +64,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  tasks:
+    image: ghcr.io/aertje/cloud-tasks-emulator:latest
+    container_name: asm-tasks
+    command: >
+      -host 0.0.0.0 -port 8123
+      -queue "projects/${ASM_TASKS_PROJECT:-local}/locations/${ASM_TASKS_LOCATION:-asia-southeast1}/queues/${ASM_TASKS_QUEUE:-scan-runner}"
+    ports:
+      - "8123:8123"
 
 volumes:
   postgres_data:

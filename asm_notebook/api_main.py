@@ -82,6 +82,10 @@ class AuthAllowlistEntry(BaseModel):
     role: str
 
 
+class TaskRunScan(BaseModel):
+    scan_id: int
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
@@ -110,6 +114,18 @@ def _scan_limits(role: str) -> dict[str, int]:
             "scans_per_hour": _int("USER_SCANS_PER_HOUR", 2),
         }
     return {"cooldown_seconds": 0, "scans_per_hour": 0}
+
+
+def _require_task_secret(request: Request) -> None:
+    secret = os.getenv("ASM_TASKS_SECRET", "").strip()
+    if not secret:
+        return
+    header = request.headers.get("X-ASM-TASKS-SECRET", "")
+    if header != secret:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "forbidden", "message": "Invalid task secret"},
+        )
 
 
 def _principal_for_log(principal: Principal) -> str:
@@ -443,6 +459,18 @@ def trigger_scan(
     return scan_service.trigger_scan(
         slug, background_tasks, deep_scan=deep_scan, principal=principal
     )
+
+
+@router.post("/tasks/run_scan", status_code=200)
+def run_scan_task(payload: TaskRunScan, request: Request) -> dict[str, Any]:
+    _require_task_secret(request)
+    scan_service.run_scan_task(payload.scan_id)
+    return {"ok": True, "scan_id": payload.scan_id}
+
+
+@router.get("/tasks/health")
+def tasks_health() -> dict[str, Any]:
+    return scan_service.tasks_status()
 
 
 @router.get("/companies/{slug}/scans")
