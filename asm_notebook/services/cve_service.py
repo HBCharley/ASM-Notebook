@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -52,6 +54,8 @@ _index_cache: dict[str, Any] = {
     "built_at": None,
     "record_count": 0,
     "cve_count": 0,
+    "last_attempt_at": None,
+    "last_failed_at": None,
 }
 
 
@@ -282,6 +286,7 @@ def _extract_cve_payload(entry: dict[str, Any]) -> tuple[str, str, dict[str, Any
 
 
 def _build_index(years: list[int]) -> None:
+    log.info("Building NVD index for years=%s", years)
     feeds = _ensure_feeds(years)
     index_by_product: dict[str, list[dict[str, Any]]] = {}
     index_by_vendor_product: dict[str, list[dict[str, Any]]] = {}
@@ -339,7 +344,25 @@ def _ensure_index() -> None:
     cached = _index_cache.get("loaded_years")
     if cached == years and _index_cache.get("built"):
         return
-    _build_index(years)
+    retry_window = int(os.getenv("ASM_NVD_RETRY_SECONDS", "600"))
+    timeout_seconds = int(os.getenv("ASM_CVE_TIMEOUT_SECONDS", "30"))
+    last_attempt = _index_cache.get("last_attempt_at") or 0
+    if not _index_cache.get("built") and time.time() - float(last_attempt) < retry_window:
+        return
+    _index_cache["last_attempt_at"] = time.time()
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_build_index, years)
+            if timeout_seconds > 0:
+                future.result(timeout=timeout_seconds)
+            else:
+                future.result()
+    except FutureTimeout:
+        log.warning("NVD index build timed out after %ss", timeout_seconds)
+        _index_cache["last_failed_at"] = datetime.utcnow().isoformat()
+    except Exception:
+        log.exception("NVD index build failed")
+        _index_cache["last_failed_at"] = datetime.utcnow().isoformat()
 
 
 def _candidate_counts(name: str) -> dict[str, int]:
