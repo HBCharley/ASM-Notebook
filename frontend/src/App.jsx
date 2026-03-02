@@ -3177,6 +3177,9 @@ export default function App() {
                     <div className="muted">
                       Starting a new scan is disabled until completion.
                     </div>
+                    <div className="muted">
+                      This can take several minutes. Please Standby.
+                    </div>
                   </div>
                 ) : null}
 
