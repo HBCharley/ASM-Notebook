@@ -5,9 +5,12 @@
 Backend:
 
 - `ASM_DATABASE_URL`: required DB connection URL (PostgreSQL).
+- `ASM_CORS_ORIGINS`: required in production (explicit allowed origins).
 - `ASM_TEST_MODE`: set to `1` for deterministic test-mode scans.
 - `DEMO_MODE`: set to `true` for local demos without OAuth (default `false`).
 - `GOOGLE_OAUTH_CLIENT_ID`: required when `DEMO_MODE=false` (startup fails otherwise).
+- `ADMIN_EMAILS`: comma-separated admin users (always keep at least one).
+- `USER_EMAILS`: comma-separated standard users.
 - `ASM_TASKS_ENABLED`: enable Cloud Tasks dispatch.
 - `ENABLE_TASKS`: preferred boolean flag for Cloud Tasks (takes precedence if set).
 - `ASM_TASKS_PROJECT`: GCP project id.

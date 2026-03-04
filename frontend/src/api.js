@@ -81,6 +81,16 @@ export const api = {
   deleteScan: (slug, id) =>
     request(`/companies/${slug}/scans/${id}`, { method: "DELETE" }),
   getMe: () => request("/me"),
+  listGroups: () => request("/admin/groups"),
+  createGroup: (payload) =>
+    request("/admin/groups", { method: "POST", body: JSON.stringify(payload) }),
+  deleteGroup: (name) =>
+    request(`/admin/groups/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  updateCompanyGroups: (slug, groups) =>
+    request(`/admin/companies/${encodeURIComponent(slug)}/groups`, {
+      method: "PUT",
+      body: JSON.stringify({ groups }),
+    }),
   listAuthAllowlist: () => request("/admin/auth-allowlist"),
   addAuthAllowlist: (payload) =>
     request("/admin/auth-allowlist", {

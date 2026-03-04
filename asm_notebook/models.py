@@ -1,6 +1,8 @@
 from __future__ import annotations
 from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, UniqueConstraint
+import uuid
+from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, UniqueConstraint, Boolean
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -8,12 +10,17 @@ from .db import Base
 class Company(Base):
     __tablename__ = "companies"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     owner_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     visibility: Mapped[str] = mapped_column(String(32), default="private")
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
 
     domains: Mapped[list["CompanyDomain"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
@@ -21,6 +28,56 @@ class Company(Base):
     scans: Mapped[list["ScanRun"]] = relationship(
         back_populates="company", cascade="all, delete-orphan"
     )
+    company_groups: Mapped[list["CompanyGroup"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+    groups: Mapped[list["Group"]] = relationship(
+        secondary="company_groups", back_populates="companies", viewonly=True
+    )
+    created_by_user: Mapped["User"] = relationship(
+        back_populates="companies_created"
+    )
+
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    company_groups: Mapped[list["CompanyGroup"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan"
+    )
+    companies: Mapped[list["Company"]] = relationship(
+        secondary="company_groups", back_populates="groups", viewonly=True
+    )
+    users: Mapped[list["User"]] = relationship(back_populates="group")
+
+
+class CompanyGroup(Base):
+    __tablename__ = "company_groups"
+    __table_args__ = (
+        UniqueConstraint("company_id", "group_id", name="uq_company_group"),
+    )
+
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("groups.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+
+    company: Mapped["Company"] = relationship(back_populates="company_groups")
+    group: Mapped["Group"] = relationship(back_populates="company_groups")
 
 
 class CompanyDomain(Base):
@@ -30,7 +87,9 @@ class CompanyDomain(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), index=True
+    )
     domain: Mapped[str] = mapped_column(String(255), index=True)
 
     company: Mapped["Company"] = relationship(back_populates="domains")
@@ -45,7 +104,9 @@ class ScanRun(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), index=True
+    )
     company_scan_number: Mapped[int] = mapped_column(Integer, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -100,3 +161,23 @@ class AuthAllowlist(Base):
     email: Mapped[str] = mapped_column(String(255), index=True)
     role: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (UniqueConstraint("email", name="uq_users_email"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    group_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("groups.id"), index=True, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    group: Mapped["Group"] = relationship(back_populates="users")
+    companies_created: Mapped[list["Company"]] = relationship(
+        back_populates="created_by_user"
+    )

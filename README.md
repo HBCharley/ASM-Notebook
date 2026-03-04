@@ -33,15 +33,17 @@ This project intentionally avoids invasive probing and focuses on publicly avail
 - Structured JSON artifacts
 - Hardened company-scoped access
 
-## Auth & RBAC (Demo Mode)
+## Auth & Access Control
 
-- Optional Google OIDC authentication (ID tokens).
-- Public (unauthenticated or unlisted email) is read-only and limited to `PUBLIC_COMPANY_SLUGS`.
+- Google OIDC authentication (ID tokens) with optional demo mode.
+- Public (unauthenticated or unlisted email) is read-only and limited to companies in the `Unauthenticated` group.
 - Authenticated roles:
-  - `ADMIN_EMAILS` = full access (rate-limited).
-  - `USER_EMAILS` = limited access (owned companies only, max 3, strict scan limits).
-- Admins can add authenticated users via the database-backed auth allowlist (see Admin tools),
+  - `ADMIN_EMAILS` = full access, can manage users/groups and assign companies to groups.
+  - `USER_EMAILS` = limited access to companies in their assigned group.
+- Admins can add authenticated users via the database-backed auth allowlist (Admin tools),
   which supplements the env allowlists above.
+- Every non-admin user belongs to exactly one group.
+- Default groups: `Unauthenticated`, `Default`.
 - Keep at least one admin in `ADMIN_EMAILS` so you can always regain access.
 - Production hardening:
   - `DEMO_MODE=false` (default) requires `GOOGLE_OAUTH_CLIENT_ID` or the app will refuse to start.
@@ -193,13 +195,13 @@ Target: one Cloud Run service serving UI at `/` and API at `/api/v1`.
 Required env vars:
 
 - `ASM_DATABASE_URL` (PostgreSQL URL, include `sslmode=require`)
-- `ASM_CORS_ORIGINS` (comma-separated allowed origins, default to `https://asm.cthomas.net` for the demo)
+- `ASM_CORS_ORIGINS` (comma-separated allowed origins; required in production)
 - `ASM_TEST_MODE` (optional, default `0`)
 - `DEMO_MODE` (default `false`; keep `false` in production)
 - `GOOGLE_OAUTH_CLIENT_ID` (Google OAuth client ID for ID token verification)
 - `ADMIN_EMAILS` (comma-separated)
 - `USER_EMAILS` (comma-separated)
-- `PUBLIC_COMPANY_SLUGS` (comma-separated; default `company-a,company-b`)
+- `PUBLIC_COMPANY_SLUGS` (legacy; public access is now group-based via `Unauthenticated`)
 - `ADMIN_SCAN_COOLDOWN_SECONDS` / `ADMIN_SCANS_PER_HOUR`
 - `USER_SCAN_COOLDOWN_SECONDS` / `USER_SCANS_PER_HOUR`
 - `ENABLE_TASKS=1` (preferred) or `ASM_TASKS_ENABLED=1` (enable Cloud Tasks for scans)
@@ -351,9 +353,8 @@ Notes:
   - Export full artifacts JSON to file
 - Theme:
   - Light/dark toggle in Settings with per-user persistence
-- Multi-user (UI only):
-  - Switch between users (no real auth)
-  - Admins can manage users, groups, and company group assignments
+  - Multi-user:
+  - Admins can manage users, groups, and company group assignments (persisted in DB)
   - Settings includes admin-only buttons:
     - `Manage companies` opens a modal to add companies and set group assignment
     - `Manage users` opens the admin panel (including auth allowlist for Google login)
@@ -426,6 +427,16 @@ Admin (auth allowlist):
 - `GET /api/v1/admin/auth-allowlist`
 - `POST /api/v1/admin/auth-allowlist`
 - `DELETE /api/v1/admin/auth-allowlist/{email}`
+
+Admin (groups & assignments):
+
+- `GET /api/v1/admin/groups`
+- `POST /api/v1/admin/groups`
+- `DELETE /api/v1/admin/groups/{name}`
+- `PUT /api/v1/admin/companies/{slug}/groups`
+- `POST /api/v1/admin/companies/{company_id}/groups`
+- `DELETE /api/v1/admin/companies/{company_id}/groups/{group_id}`
+- `PATCH /api/v1/admin/users/{user_id}/group`
 
 ### API Examples
 

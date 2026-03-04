@@ -33,7 +33,11 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     import asm_notebook.security as security
     api_main.app.dependency_overrides[security.get_principal] = (
         lambda: Principal(
-            role="admin", email="admin@example.com", sub="1", authenticated=True
+            role="admin",
+            email="admin@example.com",
+            sub="1",
+            authenticated=True,
+            group_id=None,
         )
     )
     class _DummyCompany:
@@ -80,7 +84,14 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     scans: list[dict[str, object]] = []
     next_scan_number = {"value": 1}
 
-    def _create_company(slug, name, domains, owner_email=None, visibility="private"):
+    def _create_company(
+        slug,
+        name,
+        domains,
+        owner_email=None,
+        visibility="private",
+        group_names=None,
+    ):
         created[slug] = {
             "id": len(created) + 1,
             "slug": slug,

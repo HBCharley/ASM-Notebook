@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+import uuid
 from typing import Any
 
 from fastapi import HTTPException, Request
@@ -11,17 +12,18 @@ from google.oauth2 import id_token
 from sqlalchemy import select
 
 from .db import SessionLocal
-from .models import AuthAllowlist
+from .models import AuthAllowlist, User
+from .services import group_service
 
 logger = logging.getLogger("asm_notebook.auth")
 
 
 @dataclass(frozen=True)
-class Principal:
-    role: str
-    email: str | None
-    sub: str | None
-    authenticated: bool = False
+class CurrentUser:
+    id: uuid.UUID
+    email: str
+    is_admin: bool
+    group_id: uuid.UUID | None
 
 
 def _parse_csv_env(name: str, default: str = "") -> set[str]:
@@ -103,20 +105,59 @@ def _verify_token(token: str) -> dict[str, Any]:
     return payload
 
 
-def get_principal(request: Request) -> Principal:
+def get_current_user(request: Request) -> CurrentUser | None:
     auth_header = request.headers.get("Authorization") or ""
     if not auth_header or not auth_header.lower().startswith("bearer "):
-        return Principal(role="public", email=None, sub=None, authenticated=False)
+        return None
 
     token = auth_header.split(" ", 1)[1].strip()
     if not token:
-        return Principal(role="public", email=None, sub=None, authenticated=False)
+        return None
 
     payload = _verify_token(token)
     email = str(payload.get("email") or "").lower() or None
-    sub = payload.get("sub") or None
+    if not email:
+        return None
     role = _role_for_email(email)
-    return Principal(role=role, email=email, sub=sub, authenticated=True)
+    if role == "public":
+        return None
+    with SessionLocal() as session:
+        user = (
+            session.execute(select(User).where(User.email == email))
+            .scalars()
+            .first()
+        )
+        if not user:
+            group_id = None
+            if role == "user":
+                group_id = group_service.resolve_group_id(group_service.DEFAULT_GROUP)
+            user = User(email=email, is_admin=(role == "admin"), group_id=group_id)
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        else:
+            if role == "admin" and not user.is_admin:
+                user.is_admin = True
+                user.group_id = None
+                session.commit()
+            if role == "user" and user.is_admin:
+                user.is_admin = False
+                if not user.group_id:
+                    user.group_id = group_service.resolve_group_id(
+                        group_service.DEFAULT_GROUP
+                    )
+                session.commit()
+            if not user.is_admin and not user.group_id:
+                user.group_id = group_service.resolve_group_id(
+                    group_service.DEFAULT_GROUP
+                )
+                session.commit()
+        return CurrentUser(
+            id=user.id,
+            email=user.email,
+            is_admin=user.is_admin,
+            group_id=user.group_id,
+        )
 
 
 def forbidden_response(role: str, message: str, company: str | None = None) -> HTTPException:

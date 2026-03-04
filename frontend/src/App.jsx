@@ -4,6 +4,7 @@ import logoLight from "./assets/logo-light.png";
 import logoDark from "./assets/logo-dark.png";
 import ExecutiveDashboard from "./components/dashboard/ExecutiveDashboard.jsx";
 import SocDashboard from "./components/dashboard/SocDashboard.jsx";
+import MultiSelectDropdown from "./components/MultiSelectDropdown.jsx";
 import ViewModeSwitcher from "./components/ViewModeSwitcher.jsx";
 import {
   classifySeverity,
@@ -21,6 +22,106 @@ const UI_MODE_KEY = "asm_ui_mode";
 const NEW_GROUP_OPTION = "__new_group__";
 const MIN_CVE_SEVERITY_KEY = "asm_settings_min_cve_severity";
 const AUTH_TOKEN_KEY = "asm_auth_id_token";
+const UNAUTH_GROUP = "Unauthenticated";
+const ADMIN_DEFAULT_GROUP = "Default";
+const UNAUTH_USER_ID = "user-unauthenticated";
+
+function normalizeGroups(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const cleaned = raw
+    .map((g) => (typeof g === "string" ? g.trim() : ""))
+    .filter((g) => g);
+  const next = [];
+  const pushUnique = (g) => {
+    if (g && !next.includes(g)) next.push(g);
+  };
+  pushUnique(UNAUTH_GROUP);
+  pushUnique(ADMIN_DEFAULT_GROUP);
+  cleaned.forEach(pushUnique);
+  return next;
+}
+
+function normalizeCompanyGroupEntry(value) {
+  if (Array.isArray(value)) {
+    return Array.from(
+      new Set(
+        value
+          .map((g) => (typeof g === "string" ? g.trim() : ""))
+          .filter((g) => g)
+      )
+    );
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function normalizeCompanyGroups(value) {
+  if (!value || typeof value !== "object") return {};
+  const next = {};
+  Object.keys(value).forEach((slug) => {
+    next[slug] = normalizeCompanyGroupEntry(value[slug]);
+  });
+  return next;
+}
+
+function normalizeUsers(value, groups) {
+  const list = Array.isArray(value) ? value.filter(Boolean) : [];
+  const normalizedGroups = normalizeGroups(groups);
+  let changed = false;
+  let hasUnauth = false;
+  const nextUsers = list.map((user) => {
+    if (!user || !user.id || !user.username) {
+      changed = true;
+      return null;
+    }
+    const isUnauth =
+      user.id === UNAUTH_USER_ID || user.username === UNAUTH_GROUP;
+    if (isUnauth) {
+      hasUnauth = true;
+      const next = {
+        ...user,
+        id: UNAUTH_USER_ID,
+        username: UNAUTH_GROUP,
+        role: "standard",
+        groupId: UNAUTH_GROUP,
+      };
+      if (
+        user.id !== next.id ||
+        user.username !== next.username ||
+        user.role !== next.role ||
+        user.groupId !== next.groupId
+      ) {
+        changed = true;
+      }
+      return next;
+    }
+    if (user.role !== "admin") {
+      const nextGroup = normalizedGroups.includes(user.groupId)
+        ? user.groupId
+        : UNAUTH_GROUP;
+      if (nextGroup !== user.groupId) {
+        changed = true;
+        return { ...user, groupId: nextGroup };
+      }
+    }
+    return user;
+  });
+  const filtered = nextUsers.filter(Boolean);
+  if (!hasUnauth) {
+    filtered.unshift({
+      id: UNAUTH_USER_ID,
+      username: UNAUTH_GROUP,
+      email: "unauthenticated@local",
+      role: "standard",
+      groupId: UNAUTH_GROUP,
+      createdAt: new Date().toISOString(),
+    });
+    changed = true;
+  }
+  return { users: filtered, changed };
+}
 
 function readStoredJson(key, fallback) {
   if (typeof window === "undefined") return fallback;
@@ -187,11 +288,6 @@ async function createCustomerFromHeader({
   newCustomerName,
   newCustomerDomain,
   allCompanies,
-  activeUser,
-  groups,
-  companyGroups,
-  setStoredCompanyGroups,
-  setStoredGroups,
   setNewCustomerName,
   setNewCustomerDomain,
   loadCompanies,
@@ -211,17 +307,6 @@ async function createCustomerFromHeader({
     name,
     domains: [domain],
   });
-  const assignedGroup =
-    activeUser?.role === "standard" && activeUser.groupId
-      ? activeUser.groupId
-      : groups[0] || "default";
-  setStoredCompanyGroups({
-    ...companyGroups,
-    [created.slug]: assignedGroup,
-  });
-  if (assignedGroup && !groups.includes(assignedGroup)) {
-    setStoredGroups([...groups, assignedGroup]);
-  }
   setNewCustomerName("");
   setNewCustomerDomain("");
   await loadCompanies();
@@ -1958,16 +2043,18 @@ export default function App() {
   });
   const customerCardRef = useRef(null);
   const scansCardRef = useRef(null);
-  const [users, setUsers] = useState(() => readStoredJson(USER_STORAGE_KEY, []));
-  const [groups, setGroups] = useState(() => {
-    const stored = readStoredJson(GROUP_STORAGE_KEY, []);
-    return stored.length ? stored : ["default"];
+  const [groups, setGroups] = useState(() =>
+    normalizeGroups(readStoredJson(GROUP_STORAGE_KEY, []))
+  );
+  const [users, setUsers] = useState(() => {
+    const storedGroups = normalizeGroups(readStoredJson(GROUP_STORAGE_KEY, []));
+    return normalizeUsers(readStoredJson(USER_STORAGE_KEY, []), storedGroups).users;
   });
   const [companyGroups, setCompanyGroups] = useState(() =>
-    readStoredJson(COMPANY_GROUP_KEY, {})
+    normalizeCompanyGroups(readStoredJson(COMPANY_GROUP_KEY, {}))
   );
   const [activeUserId, setActiveUserId] = useState(
-    () => window.localStorage.getItem(ACTIVE_USER_KEY) || ""
+    () => window.localStorage.getItem(ACTIVE_USER_KEY) || UNAUTH_USER_ID
   );
   const [userError, setUserError] = useState("");
   const [authAllowlist, setAuthAllowlist] = useState([]);
@@ -1980,7 +2067,7 @@ export default function App() {
   const [newUserGroupId, setNewUserGroupId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
   const [newUserGroupChoice, setNewUserGroupChoice] = useState(
-    groups[0] || NEW_GROUP_OPTION
+    groups[0] || UNAUTH_GROUP
   );
   const [switchUserId, setSwitchUserId] = useState("");
   const [editingUserId, setEditingUserId] = useState("");
@@ -2088,21 +2175,19 @@ export default function App() {
     () => users.find((u) => u.id === activeUserId) || null,
     [users, activeUserId]
   );
+  useEffect(() => {
+    if (!users.length) return;
+    if (!activeUserId || !users.some((u) => u.id === activeUserId)) {
+      setStoredActiveUser(UNAUTH_USER_ID);
+      setSwitchUserId(UNAUTH_USER_ID);
+    }
+  }, [users, activeUserId]);
   const isAdmin = me.role === "admin";
   const publicSlugs = useMemo(
     () => new Set(me.public_company_slugs || []),
     [me.public_company_slugs]
   );
-  const allowedSlugs = useMemo(
-    () => new Set(me.allowed_company_slugs || []),
-    [me.allowed_company_slugs]
-  );
-  const companies = useMemo(() => {
-    if (me.role === "admin") {
-      return allCompanies;
-    }
-    return allCompanies.filter((company) => allowedSlugs.has(company.slug));
-  }, [allCompanies, allowedSlugs, me.role]);
+  const companies = useMemo(() => allCompanies, [allCompanies]);
   const activeScan = useMemo(
     () => scans.find((s) => s.id === selectedScanId),
     [scans, selectedScanId]
@@ -2144,36 +2229,29 @@ export default function App() {
   async function loadCompanies() {
     const data = await api.listCompanies();
     setAllCompanies(data);
+    const nextCompanyGroups = {};
+    const nextGroups = new Set(normalizeGroups(groups));
+    for (const company of data) {
+      const assigned = normalizeCompanyGroupEntry(company.groups || []);
+      nextCompanyGroups[company.slug] = assigned;
+      assigned.forEach((groupId) => nextGroups.add(groupId));
+    }
+    const normalizedCompanyGroups = normalizeCompanyGroups(nextCompanyGroups);
+    const normalizedGroups = normalizeGroups(Array.from(nextGroups));
+    setCompanyGroups(normalizedCompanyGroups);
+    writeStoredJson(COMPANY_GROUP_KEY, normalizedCompanyGroups);
+    if (normalizedGroups.join("|") !== normalizeGroups(groups).join("|")) {
+      setGroups(normalizedGroups);
+      writeStoredJson(GROUP_STORAGE_KEY, normalizedGroups);
+    }
+  }
 
-    setCompanyGroups((current) => {
-      let next = { ...current };
-      let changed = false;
-      let nextGroups = groups.slice();
-      const fallbackGroup = nextGroups[0] || "default";
-      if (!nextGroups.length) {
-        nextGroups = ["default"];
-        changed = true;
-      }
-      for (const company of data) {
-        if (!next[company.slug]) {
-          const assigned = fallbackGroup;
-          next[company.slug] = assigned;
-          if (assigned && !nextGroups.includes(assigned)) {
-            nextGroups.push(assigned);
-          }
-          changed = true;
-        }
-      }
-      if (changed) {
-        if (nextGroups.length && nextGroups.join("|") !== groups.join("|")) {
-          setGroups(nextGroups);
-          writeStoredJson(GROUP_STORAGE_KEY, nextGroups);
-        }
-        writeStoredJson(COMPANY_GROUP_KEY, next);
-        return next;
-      }
-      return current;
-    });
+  async function loadGroups() {
+    if (!isAdmin) return;
+    const data = await api.listGroups();
+    const normalized = normalizeGroups(Array.isArray(data) ? data : []);
+    setGroups(normalized);
+    writeStoredJson(GROUP_STORAGE_KEY, normalized);
   }
 
   async function loadCompany(slug) {
@@ -2296,35 +2374,28 @@ export default function App() {
   }
 
   function setStoredUsers(next) {
-    setUsers(next);
-    writeStoredJson(USER_STORAGE_KEY, next);
+    const { users: normalized } = normalizeUsers(next, groups);
+    setUsers(normalized);
+    writeStoredJson(USER_STORAGE_KEY, normalized);
   }
 
   function setStoredGroups(next) {
-    const normalized = next.length ? next : ["default"];
+    const normalized = normalizeGroups(next);
     setGroups(normalized);
     writeStoredJson(GROUP_STORAGE_KEY, normalized);
   }
 
-  function setStoredCompanyGroups(next) {
-    setCompanyGroups(next);
-    writeStoredJson(COMPANY_GROUP_KEY, next);
-  }
-
   function setStoredActiveUser(nextId) {
-    setActiveUserId(nextId);
-    if (nextId) {
-      window.localStorage.setItem(ACTIVE_USER_KEY, nextId);
-    } else {
-      window.localStorage.removeItem(ACTIVE_USER_KEY);
-    }
+    const next = nextId || UNAUTH_USER_ID;
+    setActiveUserId(next);
+    window.localStorage.setItem(ACTIVE_USER_KEY, next);
   }
 
   function resetUserForm() {
     setNewUserName("");
     setNewUserEmail("");
     setNewUserRole("standard");
-    setNewUserGroupChoice(groups[0] || NEW_GROUP_OPTION);
+    setNewUserGroupChoice(groups[0] || UNAUTH_GROUP);
     setNewUserGroupId("");
   }
 
@@ -2381,15 +2452,12 @@ export default function App() {
       setUserError("Standard users must have a group ID.");
       return;
     }
-    let nextGroups = groups.slice();
+    let nextGroups = normalizeGroups(groups);
     if (groupId && !nextGroups.includes(groupId)) {
       nextGroups.push(groupId);
     }
-    if (!nextGroups.length) {
-      nextGroups = ["default"];
-      if (role === "standard" && !groupId) {
-        groupId = "default";
-      }
+    if (role === "standard" && !groupId) {
+      groupId = UNAUTH_GROUP;
     }
     const user = {
       id: makeId("user"),
@@ -2416,11 +2484,15 @@ export default function App() {
   function handleRemoveUser(userId) {
     const target = users.find((u) => u.id === userId);
     if (!target) return;
+    if (target.id === UNAUTH_USER_ID) {
+      setUserError("The Unauthenticated user cannot be removed.");
+      return;
+    }
     if (!confirm(`Remove user ${target.username}?`)) return;
     const next = users.filter((u) => u.id !== userId);
     setStoredUsers(next);
     if (activeUserId === userId) {
-      setStoredActiveUser("");
+      setStoredActiveUser(UNAUTH_USER_ID);
     }
     if (editingUserId === userId) {
       setEditingUserId("");
@@ -2439,7 +2511,8 @@ export default function App() {
       setUserError("Email is required.");
       return;
     }
-    if (!editUserGroupId.trim()) {
+    const nextGroupId = editUserGroupId.trim();
+    if (!nextGroupId) {
       setUserError("Group ID is required.");
       return;
     }
@@ -2458,45 +2531,34 @@ export default function App() {
         ...u,
         username,
         email,
-        groupId: u.role === "standard" ? editUserGroupId.trim() : u.groupId,
+        groupId: u.role === "standard" ? nextGroupId : u.groupId,
       };
     });
     setStoredUsers(nextUsers);
+    if (!groups.includes(nextGroupId)) {
+      setStoredGroups([...groups, nextGroupId]);
+    }
     setEditingUserId("");
   }
 
-  function handleRemoveGroup(groupId) {
+  async function handleRemoveGroup(groupId) {
     if (!groupId) return;
-    if (!confirm(`Remove group ${groupId}?`)) return;
-    const nextGroups = groups.filter((g) => g !== groupId);
-    const fallback = nextGroups[0] || "default";
-    const nextUsers = users.map((u) => {
-      if (u.role === "standard" && u.groupId === groupId) {
-        return { ...u, groupId: fallback };
-      }
-      return u;
-    });
-    const nextCompanyGroups = { ...companyGroups };
-    Object.keys(nextCompanyGroups).forEach((slug) => {
-      if (nextCompanyGroups[slug] === groupId) {
-        nextCompanyGroups[slug] = fallback;
-      }
-    });
-    setStoredGroups(nextGroups.length ? nextGroups : [fallback]);
-    setStoredUsers(nextUsers);
-    setStoredCompanyGroups(nextCompanyGroups);
-  }
-
-  function handleAddGroup() {
-    const value = newGroupName.trim();
-    if (!value) return;
-    if (groups.includes(value)) {
-      setNewGroupName("");
+    if (groupId === UNAUTH_GROUP || groupId === ADMIN_DEFAULT_GROUP) {
+      setUserError("Default groups cannot be removed.");
       return;
     }
-    const next = [...groups, value];
-    setStoredGroups(next);
+    if (!confirm(`Remove group ${groupId}?`)) return;
+    await api.deleteGroup(groupId);
+    await loadGroups();
+    await loadCompanies();
+  }
+
+  async function handleAddGroup() {
+    const value = newGroupName.trim();
+    if (!value) return;
+    await api.createGroup({ name: value });
     setNewGroupName("");
+    await loadGroups();
   }
 
   async function loadAuthAllowlist() {
@@ -2540,10 +2602,24 @@ export default function App() {
     }
   }
 
-  function handleCompanyGroupChange(slug, nextGroupId) {
-    if (!slug || !nextGroupId) return;
-    const next = { ...companyGroups, [slug]: nextGroupId };
-    setStoredCompanyGroups(next);
+  async function updateCompanyGroupSelection(slug, nextGroups) {
+    if (!slug) return;
+    const normalized = normalizeCompanyGroupEntry(nextGroups);
+    const payload = normalized.length ? normalized : [ADMIN_DEFAULT_GROUP];
+    const response = await api.updateCompanyGroups(slug, payload);
+    const finalGroups = normalizeCompanyGroupEntry(response?.groups || payload);
+    setCompanyGroups((current) => {
+      const next = { ...current, [slug]: finalGroups };
+      writeStoredJson(COMPANY_GROUP_KEY, normalizeCompanyGroups(next));
+      return next;
+    });
+    if (finalGroups.length) {
+      const merged = normalizeGroups([...groups, ...finalGroups]);
+      if (merged.join("|") !== normalizeGroups(groups).join("|")) {
+        setGroups(merged);
+        writeStoredJson(GROUP_STORAGE_KEY, merged);
+      }
+    }
   }
 
   function exportArtifactsJson() {
@@ -2565,25 +2641,37 @@ export default function App() {
 
   useEffect(() => {
     if (!authReady) return;
-    runWithStatus(loadCompanies);
-  }, [authReady, me.role, me.email]);
+    runWithStatus(async () => {
+      await loadCompanies();
+      await loadGroups();
+    });
+  }, [authReady, isAdmin, me.role, me.email]);
 
   useEffect(() => {
-    if (!groups.length) {
-      setStoredGroups(["default"]);
+    const normalized = normalizeGroups(groups);
+    if (normalized.join("|") !== groups.join("|")) {
+      setStoredGroups(normalized);
+    }
+  }, [groups]);
+
+  useEffect(() => {
+    const { users: normalized, changed } = normalizeUsers(users, groups);
+    if (changed) {
+      setUsers(normalized);
+      writeStoredJson(USER_STORAGE_KEY, normalized);
     }
   }, [groups]);
 
   useEffect(() => {
     if (!newUserGroupChoice) {
-      setNewUserGroupChoice(groups[0] || NEW_GROUP_OPTION);
+      setNewUserGroupChoice(groups[0] || UNAUTH_GROUP);
       return;
     }
     if (
       newUserGroupChoice !== NEW_GROUP_OPTION &&
       !groups.includes(newUserGroupChoice)
     ) {
-      setNewUserGroupChoice(groups[0] || NEW_GROUP_OPTION);
+      setNewUserGroupChoice(groups[0] || UNAUTH_GROUP);
     }
   }, [groups, newUserGroupChoice]);
 
@@ -2608,7 +2696,7 @@ export default function App() {
 
   useEffect(() => {
     if (!userModalOpen) return;
-    setSwitchUserId(activeUserId || "");
+    setSwitchUserId(activeUserId || UNAUTH_USER_ID);
     setUserError("");
     setEditingUserId("");
     setAuthAllowError("");
@@ -2799,11 +2887,6 @@ export default function App() {
                       newCustomerName,
                       newCustomerDomain,
                       allCompanies,
-                      activeUser,
-                      groups,
-                      companyGroups,
-                      setStoredCompanyGroups,
-                      setStoredGroups,
                       setNewCustomerName,
                       setNewCustomerDomain,
                       loadCompanies,
@@ -3667,20 +3750,15 @@ export default function App() {
                   <button
                     onClick={() =>
                       runWithStatus(async () => {
-                        await createCustomerFromHeader({
-                          newCustomerName,
-                          newCustomerDomain,
-                          allCompanies,
-                          activeUser,
-                          groups,
-                          companyGroups,
-                          setStoredCompanyGroups,
-                          setStoredGroups,
-                          setNewCustomerName,
-                          setNewCustomerDomain,
-                          loadCompanies,
-                          setSelectedCustomer,
-                        });
+                    await createCustomerFromHeader({
+                      newCustomerName,
+                      newCustomerDomain,
+                      allCompanies,
+                      setNewCustomerName,
+                      setNewCustomerDomain,
+                      loadCompanies,
+                      setSelectedCustomer,
+                    });
                       })
                     }
                   >
@@ -3754,11 +3832,6 @@ export default function App() {
                         newCustomerName: adminCustomerName,
                         newCustomerDomain: adminCustomerDomain,
                         allCompanies,
-                        activeUser,
-                        groups,
-                        companyGroups,
-                        setStoredCompanyGroups,
-                        setStoredGroups,
                         setNewCustomerName: setAdminCustomerName,
                         setNewCustomerDomain: setAdminCustomerDomain,
                         loadCompanies,
@@ -3778,23 +3851,23 @@ export default function App() {
                       <div key={company.slug} className="settings-company-row">
                         <div>
                           <div className="settings-company-name">{company.name}</div>
-                          <div className="muted">{company.slug}</div>
+                          <div className="muted">Slug: {company.slug}</div>
                         </div>
-                        <label className="settings-company-group">
-                          Group ID
-                          <select
-                            value={companyGroups[company.slug] || groups[0] || ""}
-                            onChange={(e) =>
-                              handleCompanyGroupChange(company.slug, e.target.value)
+                        <div className="settings-company-group">
+                          <MultiSelectDropdown
+                            label="Groups"
+                            options={groups}
+                            value={normalizeCompanyGroupEntry(
+                              companyGroups[company.slug]
+                            )}
+                            placeholder="Select groups"
+                            onChange={(next) =>
+                              runWithStatus(() =>
+                                updateCompanyGroupSelection(company.slug, next)
+                              )
                             }
-                          >
-                            {groups.map((groupId) => (
-                              <option key={groupId} value={groupId}>
-                                {groupId}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                          />
+                        </div>
                       </div>
                     ))
                   ) : (
@@ -3832,7 +3905,7 @@ export default function App() {
                     placeholder="engineering"
                   />
                 </label>
-                <button onClick={handleAddGroup}>Create</button>
+                <button onClick={() => runWithStatus(handleAddGroup)}>Create</button>
                 <h3 style={{ marginTop: "1.5rem" }}>Groups</h3>
                 <div className="group-list">
                   {groups.map((groupId) => (
@@ -3840,7 +3913,7 @@ export default function App() {
                       <span>{groupId}</span>
                       <button
                         className="danger ghost"
-                        onClick={() => handleRemoveGroup(groupId)}
+                        onClick={() => runWithStatus(() => handleRemoveGroup(groupId))}
                       >
                         Remove
                       </button>
@@ -3856,23 +3929,23 @@ export default function App() {
                       <div key={company.slug} className="settings-company-row">
                         <div>
                           <div className="settings-company-name">{company.name}</div>
-                          <div className="muted">{company.slug}</div>
+                          <div className="muted">Slug: {company.slug}</div>
                         </div>
-                        <label className="settings-company-group">
-                          Group ID
-                          <select
-                            value={companyGroups[company.slug] || groups[0] || ""}
-                            onChange={(e) =>
-                              handleCompanyGroupChange(company.slug, e.target.value)
+                        <div className="settings-company-group">
+                          <MultiSelectDropdown
+                            label="Groups"
+                            options={groups}
+                            value={normalizeCompanyGroupEntry(
+                              companyGroups[company.slug]
+                            )}
+                            placeholder="Select groups"
+                            onChange={(next) =>
+                              runWithStatus(() =>
+                                updateCompanyGroupSelection(company.slug, next)
+                              )
                             }
-                          >
-                            {groups.map((groupId) => (
-                              <option key={groupId} value={groupId}>
-                                {groupId}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
+                          />
+                        </div>
                       </div>
                     ))
                   ) : (
@@ -3930,9 +4003,12 @@ export default function App() {
                 <div className="muted">
                   Active: {activeUser ? activeUser.username : "None"}
                 </div>
-                <button className="ghost" onClick={() => setStoredActiveUser("")}>
-                  Logout
-                </button>
+                  <button
+                    className="ghost"
+                    onClick={() => setStoredActiveUser(UNAUTH_USER_ID)}
+                  >
+                    Switch to Unauthenticated
+                  </button>
               </section>
 
               <section className="panel">
@@ -4226,29 +4302,29 @@ export default function App() {
                   Add domain
                 </button>
               </details>
-              {isAdmin ? (
-                <details className="panel mini" open>
-                  <summary>Group assignment</summary>
-                  <label>
-                    Group ID
-                    <select
-                      value={companyGroups[activeCompany.slug] || groups[0] || ""}
-                      onChange={(e) =>
-                        handleCompanyGroupChange(activeCompany.slug, e.target.value)
-                      }
-                    >
-                      {groups.map((groupId) => (
-                        <option key={groupId} value={groupId}>
-                          {groupId}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="muted">
-                    Standard users only see companies in their assigned group.
-                  </div>
-                </details>
-              ) : null}
+                {isAdmin ? (
+                  <details className="panel mini" open>
+                    <summary>Group assignment</summary>
+                    <div className="settings-company-group">
+                      <MultiSelectDropdown
+                        label="Groups"
+                        options={groups}
+                        value={normalizeCompanyGroupEntry(
+                          companyGroups[activeCompany.slug]
+                        )}
+                        placeholder="Select groups"
+                        onChange={(next) =>
+                          runWithStatus(() =>
+                            updateCompanyGroupSelection(activeCompany.slug, next)
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="muted">
+                      Non-admin users only see companies in their assigned group.
+                    </div>
+                  </details>
+                ) : null}
             </div>
           </div>
         </div>

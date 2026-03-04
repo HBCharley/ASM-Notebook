@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Company, ScanArtifact, ScanRateLimit, ScanRun
-from ..security import Principal
+from ..security import CurrentUser
 from ..plugins.ct import ct_subdomains
 from ..plugins.dns import resolve_dns, resolve_ips
 from ..plugins.http_meta import fetch_http_metadata
@@ -193,11 +193,12 @@ def _company_by_slug(session: SessionLocal, slug: str) -> Company | None:
 
 def _enforce_scan_limits(
     s: Session,
-    principal: Principal,
+    current_user: CurrentUser,
     company: Company,
 ) -> None:
     now = _now_utc()
-    limits = _scan_limits(principal.role)
+    role = "admin" if current_user.is_admin else "user"
+    limits = _scan_limits(role)
     cooldown_seconds = limits["cooldown_seconds"]
     scans_per_hour = limits["scans_per_hour"]
     running_stale_seconds = limits.get("running_stale_seconds", 1800)
@@ -261,7 +262,7 @@ def _enforce_scan_limits(
                 )
 
     if scans_per_hour > 0:
-        email = principal.email or ""
+        email = current_user.email or ""
         if not email:
             raise _rate_limited(
                 "Scan quota unavailable (missing user identity).",
@@ -290,14 +291,14 @@ def _enforce_scan_limits(
                 retry_after_seconds=max(retry_after, 60),
             )
 
-    if scans_per_hour > 0 and principal.email:
+    if scans_per_hour > 0 and current_user.email:
         window_start = _hour_bucket(now)
         user_rl = (
             s.execute(
                 select(ScanRateLimit)
                 .where(
                     ScanRateLimit.scope == "user",
-                    ScanRateLimit.key == principal.email,
+                    ScanRateLimit.key == current_user.email,
                     ScanRateLimit.window_start == window_start,
                 )
                 .with_for_update()
@@ -308,7 +309,7 @@ def _enforce_scan_limits(
         if not user_rl:
             user_rl = ScanRateLimit(
                 scope="user",
-                key=principal.email,
+                key=current_user.email,
                 window_start=window_start,
                 count=0,
             )
@@ -1487,7 +1488,7 @@ def trigger_scan(
     slug: str,
     background_tasks: BackgroundTasks,
     deep_scan: bool = False,
-    principal: Principal | None = None,
+    current_user: CurrentUser | None = None,
 ) -> dict[str, Any]:
     with SessionLocal() as s:
         with s.begin():
@@ -1499,8 +1500,8 @@ def trigger_scan(
             if not roots:
                 raise HTTPException(status_code=400, detail="Company has no domains")
 
-            if principal:
-                _enforce_scan_limits(s, principal, company)
+            if current_user:
+                _enforce_scan_limits(s, current_user, company)
 
             last_num = s.execute(
                 select(func.max(ScanRun.company_scan_number)).where(

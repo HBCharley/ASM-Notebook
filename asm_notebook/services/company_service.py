@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
 from ..db import SessionLocal
 from ..models import Company, CompanyDomain
+from . import group_service
 
 
 def normalize_domain(value: str) -> str:
@@ -25,6 +27,9 @@ def create_company(
     domains: list[str],
     owner_email: str | None = None,
     visibility: str = "private",
+    group_names: list[str] | None = None,
+    group_ids: list[str] | None = None,
+    created_by_user_id: UUID | str | None = None,
 ) -> dict[str, Any]:
     slug = slug.strip()
     name = name.strip()
@@ -41,12 +46,24 @@ def create_company(
             raise HTTPException(status_code=409, detail="Company slug already exists")
 
         company = Company(
-            slug=slug, name=name, owner_email=owner_email, visibility=visibility
+            slug=slug,
+            name=name,
+            owner_email=owner_email,
+            visibility=visibility,
+            created_by_user_id=created_by_user_id,
         )
         session.add(company)
         session.flush()
         for domain in clean_domains:
             session.add(CompanyDomain(company_id=company.id, domain=domain))
+        if group_ids:
+            group_service.set_company_groups_by_ids(
+                str(company.id), group_ids, session=session
+            )
+            session.refresh(company)
+        elif group_names:
+            group_service.set_company_groups(company, group_names, session=session)
+            session.refresh(company)
         session.commit()
         return {
             "id": company.id,
@@ -55,6 +72,8 @@ def create_company(
             "domains": clean_domains,
             "owner_email": company.owner_email,
             "visibility": company.visibility,
+            "created_by_user_id": company.created_by_user_id,
+            "groups": [g.name for g in company.groups],
         }
 
 
@@ -71,6 +90,8 @@ def list_companies() -> list[dict[str, Any]]:
                 "domains": [d.domain for d in company.domains],
                 "owner_email": company.owner_email,
                 "visibility": company.visibility,
+                "created_by_user_id": company.created_by_user_id,
+                "groups": [g.name for g in company.groups],
             }
             for company in companies
         ]
@@ -88,6 +109,8 @@ def get_company(slug: str) -> dict[str, Any]:
             "domains": [d.domain for d in company.domains],
             "owner_email": company.owner_email,
             "visibility": company.visibility,
+            "created_by_user_id": company.created_by_user_id,
+            "groups": [g.name for g in company.groups],
         }
 
 
@@ -109,6 +132,8 @@ def update_company(slug: str, name: str) -> dict[str, Any]:
             "domains": [d.domain for d in company.domains],
             "owner_email": company.owner_email,
             "visibility": company.visibility,
+            "created_by_user_id": company.created_by_user_id,
+            "groups": [g.name for g in company.groups],
         }
 
 

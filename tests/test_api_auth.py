@@ -32,7 +32,11 @@ def authed_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient
     import asm_notebook.security as security
     api_main.app.dependency_overrides[security.get_principal] = (
         lambda: Principal(
-            role="admin", email="admin@example.com", sub="1", authenticated=True
+            role="admin",
+            email="admin@example.com",
+            sub="1",
+            authenticated=True,
+            group_id=None,
         )
     )
     class _DummyResult:
