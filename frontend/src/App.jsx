@@ -1982,6 +1982,7 @@ export default function App() {
   const [scans, setScans] = useState([]);
   const [selectedScanId, setSelectedScanId] = useState(null);
   const [artifacts, setArtifacts] = useState(null);
+  const [artifactsScanId, setArtifactsScanId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [theme, setTheme] = useState(() => getThemeForUser(""));
@@ -2205,7 +2206,7 @@ export default function App() {
   const canScanActiveCompany = canManageActiveCompany;
   const canDeleteScan = canManageActiveCompany;
   const hasRunningScan = useMemo(
-    () => scans.some((s) => s.status === "running"),
+    () => scans.some((s) => s.status === "running" || s.status === "queued"),
     [scans]
   );
   const isActive = loading || hasRunningScan;
@@ -2275,12 +2276,14 @@ export default function App() {
     } else {
       setSelectedScanId(null);
       setArtifacts(null);
+      setArtifactsScanId(null);
     }
   }
 
   async function loadArtifacts(slug, scanId) {
     const data = await api.getArtifacts(slug, scanId);
     setArtifacts(data);
+    setArtifactsScanId(scanId);
   }
 
   async function startScan(slug) {
@@ -2299,6 +2302,7 @@ export default function App() {
       if (result?.scan_id) {
         setSelectedScanId(result.scan_id);
         setArtifacts(null);
+        setArtifactsScanId(null);
       }
     } finally {
       setScanInFlight(false);
@@ -2326,6 +2330,7 @@ export default function App() {
     setSelectedCustomer(option);
     setSelectedScanId(null);
     setArtifacts(null);
+    setArtifactsScanId(null);
   }
 
   async function runWithStatus(fn) {
@@ -2686,6 +2691,7 @@ export default function App() {
         setScans([]);
         setSelectedScanId(null);
         setArtifacts(null);
+        setArtifactsScanId(null);
       }
       return;
     }
@@ -2806,10 +2812,15 @@ export default function App() {
         setScans(nextScans);
         if (selectedScanId) {
           const selected = nextScans.find((s) => s.id === selectedScanId);
-          if (selected && selected.status === "success") {
+          if (
+            selected &&
+            selected.status === "success" &&
+            artifactsScanId !== selectedScanId
+          ) {
             const nextArtifacts = await api.getArtifacts(slug, selectedScanId);
             if (!cancelled) {
               setArtifacts(nextArtifacts);
+              setArtifactsScanId(selectedScanId);
             }
           }
         }
@@ -2818,12 +2829,12 @@ export default function App() {
       }
     };
     poll();
-    const timer = setInterval(poll, 3000);
+    const timer = setInterval(poll, 5000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [activeCompany?.slug, hasRunningScan, selectedScanId]);
+  }, [activeCompany?.slug, hasRunningScan, selectedScanId, artifactsScanId]);
 
   return (
     <div className={`app theme-${theme}`}>
@@ -3032,6 +3043,7 @@ export default function App() {
                         if (scan.id === selectedScanId) {
                           setSelectedScanId(null);
                           setArtifacts(null);
+                          setArtifactsScanId(null);
                         }
                         await loadCompany(activeCompany.slug);
                       })
@@ -3050,6 +3062,7 @@ export default function App() {
                         setActiveCompany(null);
                         setScans([]);
                         setArtifacts(null);
+                        setArtifactsScanId(null);
                         await loadCompanies();
                       })
                     }
@@ -3127,6 +3140,7 @@ export default function App() {
                         if (scan.id === selectedScanId) {
                           setSelectedScanId(null);
                           setArtifacts(null);
+                          setArtifactsScanId(null);
                         }
                         await loadCompany(activeCompany.slug);
                       })
@@ -3145,6 +3159,7 @@ export default function App() {
                         setActiveCompany(null);
                         setScans([]);
                         setArtifacts(null);
+                        setArtifactsScanId(null);
                         await loadCompanies();
                       })
                     }
@@ -3222,6 +3237,7 @@ export default function App() {
                           setActiveCompany(null);
                           setScans([]);
                           setArtifacts(null);
+                          setArtifactsScanId(null);
                           await loadCompanies();
                         })
                       }
@@ -3396,6 +3412,7 @@ export default function App() {
                                     await api.deleteScan(activeCompany.slug, scan.id);
                                     setSelectedScanId(null);
                                     setArtifacts(null);
+                                    setArtifactsScanId(null);
                                     await loadCompany(activeCompany.slug);
                                   })
                                 }
@@ -3443,6 +3460,7 @@ export default function App() {
                               onClick={() => {
                                 setSelectedScanId(null);
                                 setArtifacts(null);
+                                setArtifactsScanId(null);
                               }}
                             >
                               Close
