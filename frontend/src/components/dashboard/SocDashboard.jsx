@@ -406,7 +406,7 @@ export default function SocDashboard({
   const copySummary = () => {
     const summary = [
       `SOC summary for ${activeCompany?.slug || "-"}`,
-      `Scan #${activeScan?.company_scan_number || "-"}`,
+      `Scan #${activeScan?.company_scan_number || "-"} (id ${activeScan?.id ?? "-"})`,
       `New domains: ${newDomains.length}`,
       `Critical CVEs: ${criticalCves}`,
       `Origin exposure: ${originExposure}`,
@@ -427,6 +427,7 @@ export default function SocDashboard({
             {activeScan?.company_scan_number
               ? ` · Scan #${activeScan.company_scan_number}`
               : ""}
+            {activeScan?.id ? ` (id ${activeScan.id})` : ""}
           </div>
         </div>
         <div className="soc-actions">
@@ -704,7 +705,7 @@ export default function SocDashboard({
                 }`}
                 onClick={() => onSelectScan?.(scan.id)}
               >
-                <span>#{scan.company_scan_number}</span>
+                <span>#{scan.company_scan_number} (id {scan.id})</span>
                 <span className="soc-timeline-meta">
                   {scan.scan_mode || "standard"} · {scan.status}
                 </span>

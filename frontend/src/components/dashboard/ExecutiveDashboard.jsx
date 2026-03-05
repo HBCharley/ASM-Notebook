@@ -368,6 +368,7 @@ export default function ExecutiveDashboard({
             {activeScan?.company_scan_number
               ? ` · Scan #${activeScan.company_scan_number}`
               : ""}
+            {activeScan?.id ? ` (id ${activeScan.id})` : ""}
           </div>
         </div>
         <div className="exec-actions">
@@ -653,7 +654,7 @@ export default function ExecutiveDashboard({
               <option value="">Select scan</option>
               {scans.map((scan) => (
                 <option key={scan.id} value={scan.id}>
-                  #{scan.company_scan_number} · {scan.status}
+                  #{scan.company_scan_number} (id {scan.id}) · {scan.status}
                 </option>
               ))}
             </select>
