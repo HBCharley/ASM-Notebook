@@ -120,10 +120,14 @@ gcloud run deploy $service --image $image --region $region --platform managed --
 "@
 
 if (-not $SkipVerify) {
-  Invoke-Step "Verify health endpoints" @"
+  Invoke-Step "Verify API health" @"
 Invoke-RestMethod "$domain/api/v1/health" | ConvertTo-Json -Compress
-if ($tasksEnabled) { Invoke-RestMethod "$domain/api/v1/tasks/health" | ConvertTo-Json -Compress }
 "@
+  if ($tasksEnabled) {
+    Invoke-Step "Verify tasks health" @"
+Invoke-RestMethod "$domain/api/v1/tasks/health" | ConvertTo-Json -Compress
+"@
+  }
 }
 
 Write-Host ""
