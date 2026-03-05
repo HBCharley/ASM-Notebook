@@ -108,6 +108,10 @@ if ($tasksEnabled) {
 }
 
 $envVars += "ASM_SCAN_MAX_SECONDS=$scanMaxSeconds"
+$envVars += @(
+  "ASM_SCAN_RUNNING_STALE_SECONDS=300",
+  "ASM_SCAN_HEARTBEAT_SECONDS=15"
+)
 
 $envVarString = ($envVars -join ",")
 

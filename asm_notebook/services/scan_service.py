@@ -6,6 +6,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import os
 import re
+import threading
 from collections import Counter
 from datetime import datetime, timezone, timedelta
 from time import perf_counter
@@ -96,6 +97,39 @@ def _check_deadline(deadline_at: float | None) -> None:
         return
     if perf_counter() > deadline_at:
         raise ScanTimeout("Scan exceeded max duration")
+
+
+def _scan_heartbeat_seconds() -> int:
+    return _env_int("ASM_SCAN_HEARTBEAT_SECONDS", 15)
+
+
+def _touch_scan_heartbeat(scan_id: int) -> None:
+    with SessionLocal() as s:
+        scan = s.get(ScanRun, scan_id)
+        if not scan:
+            return
+        if scan.status != "running":
+            return
+        scan.heartbeat_at = _now_utc()
+        s.commit()
+
+
+def _mark_stale_running_scan_failed(scan: ScanRun, now: datetime) -> bool:
+    if scan.status != "running":
+        return False
+    stale_seconds = _env_int("ASM_SCAN_RUNNING_STALE_SECONDS", 1800)
+    if stale_seconds <= 0:
+        return False
+    last_heartbeat = _as_utc(scan.heartbeat_at) or _as_utc(scan.started_at)
+    if not last_heartbeat:
+        return False
+    age_seconds = (now - last_heartbeat).total_seconds()
+    if age_seconds <= stale_seconds:
+        return False
+    scan.status = "failed"
+    scan.completed_at = now
+    scan.notes = "Scan marked failed due to stale heartbeat"
+    return True
 
 
 def _scan_limits(role: str) -> dict[str, int]:
@@ -1284,6 +1318,29 @@ def _execute_scan(
             scan.heartbeat_at = _now_utc()
             s.commit()
 
+    hb_stop = threading.Event()
+    hb_thread: threading.Thread | None = None
+    hb_seconds = _scan_heartbeat_seconds()
+    if hb_seconds > 0:
+
+        def _heartbeat_loop() -> None:
+            while not hb_stop.wait(hb_seconds):
+                try:
+                    _touch_scan_heartbeat(scan_id)
+                except Exception:
+                    logger.debug(
+                        "heartbeat update failed scan_id=%s",
+                        scan_id,
+                        exc_info=True,
+                    )
+
+        hb_thread = threading.Thread(
+            target=_heartbeat_loop,
+            name=f"scan-heartbeat-{scan_id}",
+            daemon=True,
+        )
+        hb_thread.start()
+
     try:
         set_progress(1, 6, "Preparing scan")
         if _is_cancelled(scan_id):
@@ -1537,6 +1594,9 @@ def _execute_scan(
                 s.commit()
         logger.exception("Scan failed id=%s", scan_id)
     finally:
+        hb_stop.set()
+        if hb_thread:
+            hb_thread.join(timeout=2)
         _CANCELLED_SCANS.discard(scan_id)
 
 
@@ -1619,7 +1679,21 @@ def run_scan_task(scan_id: int) -> None:
         scan = s.get(ScanRun, scan_id)
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
-        if scan.status in {"running", "success", "failed", "cancelled"}:
+        if scan.status == "running":
+            now = _now_utc()
+            last_heartbeat = _as_utc(scan.heartbeat_at) or _as_utc(scan.started_at)
+            if last_heartbeat:
+                age_seconds = (now - last_heartbeat).total_seconds()
+            else:
+                age_seconds = 0
+            stale_seconds = _env_int("ASM_SCAN_RUNNING_STALE_SECONDS", 1800)
+            if stale_seconds > 0 and age_seconds > stale_seconds:
+                scan.status = "failed"
+                scan.completed_at = _now_utc()
+                scan.notes = "Scan marked failed due to stale heartbeat"
+                s.commit()
+            return
+        if scan.status in {"success", "failed", "cancelled"}:
             return
         scan.status = "running"
         scan.started_at = _now_utc()
@@ -1659,6 +1733,13 @@ def list_scans(slug: str) -> list[dict[str, Any]]:
             .scalars()
             .all()
         )
+        now = _now_utc()
+        dirty = False
+        for sc in scans:
+            if _mark_stale_running_scan_failed(sc, now):
+                dirty = True
+        if dirty:
+            s.commit()
         scan_ids = [sc.id for sc in scans]
         scan_meta: dict[int, dict[str, Any]] = {}
         cve_summaries = _load_cve_debug_summary_map(s, scan_ids)
@@ -1749,6 +1830,9 @@ def get_company_scan(slug: str, scan_id: int) -> dict[str, Any]:
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
+        now = _now_utc()
+        if _mark_stale_running_scan_failed(scan, now):
+            s.commit()
         scan_mode = ""
         meta = s.execute(
             select(ScanArtifact).where(
@@ -1788,6 +1872,9 @@ def get_company_scan_by_number(slug: str, company_scan_number: int) -> dict[str,
         ).scalar_one_or_none()
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found for company")
+        now = _now_utc()
+        if _mark_stale_running_scan_failed(scan, now):
+            s.commit()
         scan_mode = ""
         meta = s.execute(
             select(ScanArtifact).where(
