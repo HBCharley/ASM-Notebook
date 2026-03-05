@@ -54,6 +54,13 @@ Cloud Build substitutions:
 - Selection persists in local storage (`asm_ui_mode`) and does not affect backend API behavior.
 - Scan IDs are displayed in Executive + SOC dashboards to help correlate UI state with API/logs.
 
+## API Docs
+
+- Swagger UI: `/api/v1/docs`
+- ReDoc: `/api/v1/redoc`
+- OpenAPI JSON: `/api/v1/openapi.json`
+- Repo reference: `docs/API_REFERENCE.md`
+
 ## Cloud Tasks Rate Limits (Recommended)
 
 To reduce scan dispatch spikes (especially when tasks retry after a 503), throttle the queue:

@@ -192,6 +192,13 @@ API validation (curl):
 
 Target: one Cloud Run service serving UI at `/` and API at `/api/v1`.
 
+API docs (FastAPI):
+
+- Swagger UI: `/api/v1/docs`
+- ReDoc: `/api/v1/redoc`
+- OpenAPI JSON: `/api/v1/openapi.json`
+- Repo reference: `docs/API_REFERENCE.md`
+
 Required env vars:
 
 - `ASM_DATABASE_URL` (PostgreSQL URL, include `sslmode=require`)
