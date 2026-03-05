@@ -3916,15 +3916,15 @@ export default function App() {
               </button>
             </div>
             <div className="settings-row">
-              <div className="muted">
-                ASM Notebook is a local-first Attack Surface Management (ASM) app that
-                inventories domains, DNS, HTTP metadata, and scan history using
-                passive OSINT signals.
+              <div className="muted" style={{ whiteSpace: "pre-line" }}>
+                {
+                  "ASM Notebook is an experimental Attack Surface Management (ASM) platform that maps external infrastructure using passive OSINT signals.\n\nIt inventories domains, DNS records, HTTP metadata, and scan history to create a structured view of exposed assets. The system emphasizes lightweight architecture, operator-controlled deployment, and transparent infrastructure over opaque SaaS tooling.\n\nASM Notebook was built as a hands-on exploration of modern security tooling design, combining containerized services, task orchestration, and structured asset tracking into a simple deployable platform.\n\nCreated by Charley Thomas\nSolutions Engineering & Technical Strategy — Cloud and Security"
+                }
               </div>
             </div>
             <div className="settings-row">
               <a className="ghost header-action" href="https://charleyt.net" target="_blank" rel="noreferrer">
-                charleyt.net
+                → Visit charleyt.net
               </a>
             </div>
           </div>
