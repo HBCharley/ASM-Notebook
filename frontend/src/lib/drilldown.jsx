@@ -32,6 +32,11 @@ export function buildDrilldownPayload({
   minCveSeverity,
 }) {
   const intelDomains = artifacts?.dns_intel?.domains || [];
+  const intelByDomain = new Map(
+    intelDomains
+      .filter((row) => row?.domain)
+      .map((row) => [row.domain, row])
+  );
   const changeSummary = artifacts?.change_summary || null;
 
   const minRank = severityRank(minCveSeverity);
@@ -164,13 +169,50 @@ export function buildDrilldownPayload({
   const newHttp = changeSummary?.new_http || [];
   const newIps = changeSummary?.new_ips || [];
 
+  const domainServiceDetail = (domain) => {
+    const row = intelByDomain.get(domain) || null;
+    if (!row) return { summary: "No HTTP/DNS intel available for this domain." };
+    const web = row.web || {};
+    const techNames = (web.technologies || [])
+      .map((t) => (typeof t === "string" ? t : t?.name))
+      .filter(Boolean);
+    const versions = (web.reported_versions || [])
+      .map((v) => `${v.name || "service"}${v.version ? ` ${v.version}` : ""}`.trim())
+      .filter(Boolean);
+
+    const lines = [];
+    if (web.reachable || Number(web.status_code ?? 0) > 0) {
+      lines.push(`HTTP: ${web.status_code ?? "-"}${web.response_time_ms ? ` · ${Math.round(Number(web.response_time_ms))}ms` : ""}`);
+      if (web.title) lines.push(`Title: ${web.title}`);
+      if (web.final_url) lines.push(`Final URL: ${web.final_url}`);
+    } else {
+      lines.push("HTTP: unreachable");
+    }
+    if (techNames.length) lines.push(`Technologies: ${techNames.slice(0, 12).join(", ")}${techNames.length > 12 ? "…" : ""}`);
+    if (versions.length) lines.push(`Reported versions: ${versions.slice(0, 12).join(", ")}${versions.length > 12 ? "…" : ""}`);
+    if (web.edge_provider?.provider && web.edge_provider.provider !== "none") {
+      lines.push(`Edge/CDN: ${web.edge_provider.provider}`);
+    }
+    return { summary: lines.join("\n") || "No services detected." };
+  };
+
   return {
     domains: {
       title: "Domains",
       subtitle: `${totalDomains} total · ${roots.length} roots · ${discovered.length} discovered`,
       sections: [
-        { label: "Root domains", rows: roots.map((d) => ({ title: d, meta: "root" })) },
-        { label: "Discovered domains", rows: discovered.map((d) => ({ title: d, meta: "discovered" })) },
+        {
+          label: "Root domains",
+          rows: roots.map((d) => ({ title: d, meta: "root", detail: domainServiceDetail(d) })),
+        },
+        {
+          label: "Discovered domains",
+          rows: discovered.map((d) => ({
+            title: d,
+            meta: "discovered",
+            detail: domainServiceDetail(d),
+          })),
+        },
       ],
     },
     domains_added: {

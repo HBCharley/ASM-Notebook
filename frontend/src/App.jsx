@@ -18,9 +18,9 @@ const GROUP_STORAGE_KEY = "asm.groups";
 const ACTIVE_USER_KEY = "asm.user.active";
 const COMPANY_GROUP_KEY = "asm.company.groups";
 const USER_THEME_KEY = "asm.user.theme";
+const USER_MIN_CVE_KEY = "asm.user.min_cve_severity";
 const UI_MODE_KEY = "asm_ui_mode";
 const NEW_GROUP_OPTION = "__new_group__";
-const MIN_CVE_SEVERITY_KEY = "asm_settings_min_cve_severity";
 const AUTH_TOKEN_KEY = "asm_auth_id_token";
 const UNAUTH_GROUP = "Unauthenticated";
 const ADMIN_DEFAULT_GROUP = "Default";
@@ -151,6 +151,19 @@ function setThemeForUser(userId, theme) {
   const key = userId || "__guest";
   const next = { ...map, [key]: theme };
   writeStoredJson(USER_THEME_KEY, next);
+}
+
+function getMinCveSeverityForUser(userId) {
+  const map = readStoredJson(USER_MIN_CVE_KEY, {});
+  if (userId && map[userId]) return map[userId];
+  return map.__guest || "High";
+}
+
+function setMinCveSeverityForUser(userId, severity) {
+  const map = readStoredJson(USER_MIN_CVE_KEY, {});
+  const key = userId || "__guest";
+  const next = { ...map, [key]: severity };
+  writeStoredJson(USER_MIN_CVE_KEY, next);
 }
 
 function normalizeUiMode(value) {
@@ -1993,10 +2006,9 @@ export default function App() {
       window.localStorage.getItem("asm.ui.mode");
     return stored ? normalizeUiMode(stored) : "executive";
   });
-  const [minCveSeverity, setMinCveSeverity] = useState(() => {
-    if (typeof window === "undefined") return "High";
-    return window.localStorage.getItem(MIN_CVE_SEVERITY_KEY) || "High";
-  });
+  const [minCveSeverity, setMinCveSeverity] = useState(() =>
+    getMinCveSeverityForUser("")
+  );
   const [authToken, setAuthTokenState] = useState(() => {
     if (typeof window === "undefined") return "";
     return window.localStorage.getItem(AUTH_TOKEN_KEY) || "";
@@ -2017,6 +2029,7 @@ export default function App() {
   const selectedScanIdRef = useRef(selectedScanId);
   const artifactsScanIdRef = useRef(artifactsScanId);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [manageCompaniesOpen, setManageCompaniesOpen] = useState(false);
@@ -2735,7 +2748,13 @@ export default function App() {
     }
     if (!sourceKey) {
       setSourceKey(
-        artifacts.whois ? "whois" : artifactKeys[0] || ""
+        artifacts.dns_intel
+          ? "dns_intel"
+          : artifacts.domains
+            ? "domains"
+            : artifacts.dns
+              ? "dns"
+              : artifactKeys[0] || ""
       );
     }
   }, [artifacts, artifactKeys, sourceKey]);
@@ -2743,6 +2762,11 @@ export default function App() {
   useEffect(() => {
     const nextTheme = getThemeForUser(activeUserId || "");
     setTheme(nextTheme);
+  }, [activeUserId]);
+
+  useEffect(() => {
+    const nextMin = getMinCveSeverityForUser(activeUserId || "");
+    setMinCveSeverity(nextMin);
   }, [activeUserId]);
 
   useEffect(() => {
@@ -3009,6 +3033,13 @@ export default function App() {
             <div className="muted user-meta">Role: {me.role}</div>
             {me.email ? <div className="muted user-meta">{me.email}</div> : null}
             <div className="auth-controls auth-controls--status">
+              <button
+                className="ghost header-action"
+                type="button"
+                onClick={() => setAboutOpen(true)}
+              >
+                About
+              </button>
               {authToken ? (
                 <button className="ghost header-action" onClick={() => clearAuth()}>
                   Sign out
@@ -3561,6 +3592,9 @@ export default function App() {
                                     <div className="muted">Error: {entry.error}</div>
                                   ) : (
                                     <>
+                                      {entry.notice ? (
+                                        <div className="muted">{entry.notice}</div>
+                                      ) : null}
                                       <div className="graph-records">
                                         <div className="graph-record-row">
                                           <span>Registrar</span>
@@ -3744,7 +3778,7 @@ export default function App() {
                   onChange={(e) => {
                     const next = e.target.value;
                     setMinCveSeverity(next);
-                    window.localStorage.setItem(MIN_CVE_SEVERITY_KEY, next);
+                    setMinCveSeverityForUser(activeUserId || "", next);
                   }}
                 >
                   {["Critical", "High", "Medium", "Low"].map((level) => (
@@ -3869,6 +3903,30 @@ export default function App() {
                 </div>
               </div>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+      {aboutOpen ? (
+        <div className="settings-backdrop" onClick={() => setAboutOpen(false)}>
+          <div className="settings-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-header">
+              <h2>About</h2>
+              <button className="ghost" onClick={() => setAboutOpen(false)}>
+                Close
+              </button>
+            </div>
+            <div className="settings-row">
+              <div className="muted">
+                ASM Notebook is a local-first Attack Surface Management (ASM) app that
+                inventories domains, DNS, HTTP metadata, and scan history using
+                passive OSINT signals.
+              </div>
+            </div>
+            <div className="settings-row">
+              <a className="ghost header-action" href="https://charleyt.net" target="_blank" rel="noreferrer">
+                charleyt.net
+              </a>
+            </div>
           </div>
         </div>
       ) : null}

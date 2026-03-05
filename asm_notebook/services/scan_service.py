@@ -447,13 +447,13 @@ def _fetch_domain_whois(roots: list[str]) -> list[dict[str, Any]]:
                     results.append(
                         {
                             "domain": root,
-                            "error": f"RDAP {resp.status_code}",
+                            "notice": f"RDAP unavailable ({resp.status_code})",
                         }
                     )
                     continue
                 data = resp.json()
             except Exception as exc:
-                results.append({"domain": root, "error": str(exc)})
+                results.append({"domain": root, "notice": str(exc)})
                 continue
 
             registrar = None
