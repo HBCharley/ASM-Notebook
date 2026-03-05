@@ -188,8 +188,8 @@ export function buildDrilldownPayload({
     } else {
       lines.push("HTTP: unreachable");
     }
-    if (techNames.length) lines.push(`Technologies: ${techNames.slice(0, 12).join(", ")}${techNames.length > 12 ? "…" : ""}`);
-    if (versions.length) lines.push(`Reported versions: ${versions.slice(0, 12).join(", ")}${versions.length > 12 ? "…" : ""}`);
+    if (techNames.length) lines.push(`Technologies: ${techNames.join(", ")}`);
+    if (versions.length) lines.push(`Reported versions: ${versions.join(", ")}`);
     if (web.edge_provider?.provider && web.edge_provider.provider !== "none") {
       lines.push(`Edge/CDN: ${web.edge_provider.provider}`);
     }
