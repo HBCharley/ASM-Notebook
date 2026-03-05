@@ -1676,29 +1676,36 @@ def _scan_is_deep(s: Session, scan_id: int) -> bool:
 
 def run_scan_task(scan_id: int) -> None:
     with SessionLocal() as s:
-        scan = s.get(ScanRun, scan_id)
+        scan = (
+            s.execute(
+                select(ScanRun).where(ScanRun.id == scan_id).with_for_update()
+            )
+            .scalars()
+            .first()
+        )
         if not scan:
             raise HTTPException(status_code=404, detail="Scan not found")
+        restarted = False
         if scan.status == "running":
             now = _now_utc()
             last_heartbeat = _as_utc(scan.heartbeat_at) or _as_utc(scan.started_at)
-            if last_heartbeat:
-                age_seconds = (now - last_heartbeat).total_seconds()
-            else:
-                age_seconds = 0
-            stale_seconds = _env_int("ASM_SCAN_RUNNING_STALE_SECONDS", 1800)
-            if stale_seconds > 0 and age_seconds > stale_seconds:
-                scan.status = "failed"
-                scan.completed_at = _now_utc()
-                scan.notes = "Scan marked failed due to stale heartbeat"
-                s.commit()
-            return
+            age_seconds = (now - last_heartbeat).total_seconds() if last_heartbeat else 0
+
+            takeover_seconds = _env_int("ASM_SCAN_TAKEOVER_SECONDS", 20)
+            if age_seconds <= takeover_seconds:
+                return
+            logger.warning(
+                "Taking over stale running scan id=%s age_seconds=%.1f",
+                scan_id,
+                age_seconds,
+            )
+            restarted = True
         if scan.status in {"success", "failed", "cancelled"}:
             return
         scan.status = "running"
         scan.started_at = _now_utc()
         scan.heartbeat_at = _now_utc()
-        scan.notes = "1/6 Scan started"
+        scan.notes = "1/6 Scan restarted" if restarted else "1/6 Scan started"
         s.commit()
         roots = [d.domain for d in scan.company.domains]
         deep_scan = _scan_is_deep(s, scan_id)
