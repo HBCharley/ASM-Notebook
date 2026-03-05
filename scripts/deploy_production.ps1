@@ -49,6 +49,8 @@ $adminEmails = $rules.admin_emails
 $tasksEnabled = [bool]$rules.tasks.enabled
 $tasksQueue = $rules.tasks.queue
 $tasksDeadline = [int]$rules.tasks.dispatch_deadline_seconds
+if ($tasksDeadline -gt 1800) { $tasksDeadline = 1800 }
+if ($tasksDeadline -gt 0 -and $tasksDeadline -lt 15) { $tasksDeadline = 15 }
 
 $cloudRunTimeout = 3600
 if ($rules.cloud_run -and $rules.cloud_run.timeout_seconds) {

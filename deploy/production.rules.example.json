@@ -12,7 +12,7 @@
   "tasks": {
     "enabled": true,
     "queue": "scan-runner",
-    "dispatch_deadline_seconds": 3600
+    "dispatch_deadline_seconds": 1800
   },
   "cloud_run": {
     "timeout_seconds": 3600

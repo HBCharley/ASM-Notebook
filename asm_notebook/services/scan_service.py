@@ -190,6 +190,11 @@ def _enqueue_scan_task(scan_id: int, cfg: dict[str, str] | None = None) -> None:
         deadline_seconds = int(cfg["dispatch_deadline"] or "1800")
     except Exception:
         deadline_seconds = 1800
+    # Cloud Tasks enforces 15s <= dispatch_deadline <= 30m.
+    if deadline_seconds > 1800:
+        deadline_seconds = 1800
+    if 0 < deadline_seconds < 15:
+        deadline_seconds = 15
     if deadline_seconds > 0:
         task["dispatch_deadline"] = {"seconds": deadline_seconds}
     if cfg["secret"]:
