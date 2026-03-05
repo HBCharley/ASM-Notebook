@@ -107,8 +107,17 @@ def _scan_limits(role: str) -> dict[str, int]:
 
 
 def _tasks_config() -> dict[str, str]:
+    def _is_truthy(value: str) -> bool:
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    enable_tasks_raw = os.getenv("ENABLE_TASKS", "").strip()
+    if enable_tasks_raw:
+        enabled = "1" if _is_truthy(enable_tasks_raw) else "0"
+    else:
+        enabled = "1" if _is_truthy(os.getenv("ASM_TASKS_ENABLED", "0")) else "0"
+
     return {
-        "enabled": os.getenv("ASM_TASKS_ENABLED", "0").strip(),
+        "enabled": enabled,
         "project": os.getenv("ASM_TASKS_PROJECT", "local").strip() or "local",
         "location": os.getenv("ASM_TASKS_LOCATION", "asia-southeast1").strip()
         or "asia-southeast1",
@@ -141,8 +150,8 @@ def _ensure_tasks_queue(client: tasks_v2.CloudTasksClient, cfg: dict[str, str]) 
     return queue_path
 
 
-def _enqueue_scan_task(scan_id: int) -> None:
-    cfg = _tasks_config()
+def _enqueue_scan_task(scan_id: int, cfg: dict[str, str] | None = None) -> None:
+    cfg = cfg or _tasks_config()
     if cfg["enabled"] != "1":
         raise HTTPException(status_code=500, detail="Task queue not configured")
     if not cfg["target_base"]:
@@ -168,6 +177,18 @@ def _enqueue_scan_task(scan_id: int) -> None:
     if cfg["secret"]:
         task["http_request"]["headers"]["X-Tasks-Secret"] = cfg["secret"]
     client.create_task(request={"parent": queue_path, "task": task})
+
+
+def _dispatch_scan(scan_id: int, background_tasks: BackgroundTasks | None) -> None:
+    cfg = _tasks_config()
+    if cfg["enabled"] == "1":
+        _enqueue_scan_task(scan_id, cfg=cfg)
+        return
+    logger.info("Tasks disabled; running scan in-process scan_id=%s", scan_id)
+    if background_tasks is None:
+        run_scan_task(scan_id)
+    else:
+        background_tasks.add_task(run_scan_task, scan_id)
 
 
 def _hour_bucket(now: datetime) -> datetime:
@@ -1534,7 +1555,7 @@ def trigger_scan(
                 )
             )
 
-    _enqueue_scan_task(scan_id)
+    _dispatch_scan(scan_id, background_tasks)
     return {
         "company_slug": slug,
         "scan_id": scan_id,
