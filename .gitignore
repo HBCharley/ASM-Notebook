@@ -58,3 +58,6 @@ build/
 skills-lock.json
 INFO
 
+# Local deploy rules (keep example committed)
+deploy/production.rules.json
+

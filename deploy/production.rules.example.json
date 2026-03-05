@@ -1,0 +1,22 @@
+{
+  "service": "asm-notebook",
+  "region": "asia-southeast1",
+  "published_domain": "https://asm.charleyt.net",
+  "artifact_repo": "asm-notebook",
+  "image_name": "asm-notebook",
+  "image_tag": "latest",
+  "vite_google_client_id": "826358657603-c9v57f95ldcea9lg88upsnpsr6080v28.apps.googleusercontent.com",
+  "google_oauth_client_id": "826358657603-c9v57f95ldcea9lg88upsnpsr6080v28.apps.googleusercontent.com",
+  "cors_origins": "https://asm.charleyt.net",
+  "admin_emails": "charley.thomas1@gmail.com",
+  "tasks": {
+    "enabled": true,
+    "queue": "scan-runner",
+    "dispatch_deadline_seconds": 1800
+  },
+  "secrets": {
+    "asm_database_url": "ASM_DATABASE_URL",
+    "asm_tasks_secret": "ASM_TASKS_SECRET"
+  }
+}
+
