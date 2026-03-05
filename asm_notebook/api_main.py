@@ -824,13 +824,15 @@ def _static_response(path: Path, cacheable: bool) -> FileResponse:
     response = FileResponse(path)
     if cacheable:
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    if path.suffix.lower() == ".html":
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
     return response
 
 
 if _DIST_DIR:
     @app.get("/", include_in_schema=False)
     def _serve_index() -> FileResponse:
-        return FileResponse(_DIST_DIR / "index.html")
+        return _static_response(_DIST_DIR / "index.html", cacheable=False)
 
     @app.get("/{path:path}", include_in_schema=False)
     def _serve_spa(path: str) -> FileResponse:
@@ -840,4 +842,4 @@ if _DIST_DIR:
         if candidate.is_file() and str(candidate).startswith(str(_DIST_DIR.resolve())):
             cacheable = path.startswith("assets/")
             return _static_response(candidate, cacheable)
-        return FileResponse(_DIST_DIR / "index.html")
+        return _static_response(_DIST_DIR / "index.html", cacheable=False)
