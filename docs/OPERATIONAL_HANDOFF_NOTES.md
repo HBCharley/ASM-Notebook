@@ -19,6 +19,10 @@ Backend:
 - `ASM_TASKS_TARGET_BASE`: public service URL or custom domain.
 - `ASM_TASKS_SECRET`: shared secret for task requests (required when tasks are enabled).
 - `ASM_TASKS_DISPATCH_DEADLINE_SECONDS`: optional, defaults to 1800.
+- `ASM_SCAN_MAX_SECONDS`: optional, defaults to 3600.
+- `ASM_SCAN_HEARTBEAT_SECONDS`: optional heartbeat ticker while scanning.
+- `ASM_SCAN_RUNNING_STALE_SECONDS`: optional, marks stale `running` scans as failed.
+- `ASM_SCAN_TAKEOVER_SECONDS`: optional, allows Cloud Tasks retry to restart a stale `running` scan.
 - `ASM_CVE_TIMEOUT_SECONDS`: optional, defaults to 30.
 - `ASM_CVE_DOMAIN_TIMEOUT_SECONDS`: optional, defaults to 5.
 - `ASM_NVD_RETRY_SECONDS`: optional, defaults to 600.
@@ -48,3 +52,14 @@ Cloud Build substitutions:
 
 - View modes: `Standard`, `Executive`, and `SOC Analyst` via the header view switcher.
 - Selection persists in local storage (`asm_ui_mode`) and does not affect backend API behavior.
+- Scan IDs are displayed in Executive + SOC dashboards to help correlate UI state with API/logs.
+
+## Cloud Tasks Rate Limits (Recommended)
+
+To reduce scan dispatch spikes (especially when tasks retry after a 503), throttle the queue:
+
+```powershell
+gcloud tasks queues update scan-runner --location <REGION> `
+  --max-concurrent-dispatches=5 `
+  --max-dispatches-per-second=1
+```

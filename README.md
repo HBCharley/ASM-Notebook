@@ -211,6 +211,10 @@ Required env vars:
 - `ASM_TASKS_TARGET_BASE` (public service URL or custom domain)
 - `ASM_TASKS_SECRET` (shared secret for task calls; required when tasks are enabled)
 - `ASM_TASKS_DISPATCH_DEADLINE_SECONDS` (optional, default `1800`)
+- `ASM_SCAN_MAX_SECONDS` (optional, default `3600`; hard stop inside scan worker)
+- `ASM_SCAN_HEARTBEAT_SECONDS` (optional, default `15`; updates `heartbeat_at` while scanning)
+- `ASM_SCAN_RUNNING_STALE_SECONDS` (optional, default `1800`; marks `running` scans as failed when heartbeat is stale)
+- `ASM_SCAN_TAKEOVER_SECONDS` (optional, default `20`; allows Cloud Tasks retry to “take over” a stale `running` scan)
 - `ASM_CVE_TIMEOUT_SECONDS` (optional, default `30`)
 - `ASM_CVE_DOMAIN_TIMEOUT_SECONDS` (optional, default `5`)
 - `ASM_NVD_RETRY_SECONDS` (optional, default `600`)
@@ -232,6 +236,12 @@ gcloud builds submit --config cloudbuild.yaml --substitutions `
 
 # Create Cloud Tasks queue
 gcloud tasks queues create scan-runner --location <REGION>
+
+# Optional: throttle Cloud Tasks dispatch (recommended for production)
+# Note: Cloud Tasks may clamp maxBurstSize; verify with `gcloud tasks queues describe`.
+gcloud tasks queues update scan-runner --location <REGION> `
+  --max-concurrent-dispatches=5 `
+  --max-dispatches-per-second=1
 
 # Deploy to Cloud Run
 gcloud run deploy asm-notebook `
