@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+import hashlib
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -47,6 +49,19 @@ def _http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
     if isinstance(exc.detail, dict) and exc.detail.get("error"):
         return JSONResponse(status_code=exc.status_code, content=exc.detail)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+def _build_etag(payload: Any) -> str:
+    encoded = jsonable_encoder(payload)
+    raw = json.dumps(encoded, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return f"\"{hashlib.sha1(raw).hexdigest()}\""
+
+
+def _maybe_not_modified(request: Request, etag: str) -> Response | None:
+    if_none_match = request.headers.get("if-none-match", "")
+    if if_none_match and if_none_match == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return None
 
 
 def _cors_origins() -> list[str]:
@@ -743,10 +758,22 @@ def tasks_health() -> dict[str, Any]:
 
 
 @router.get("/companies/{slug}/scans")
-def list_scans(slug: str, current_user: CurrentUser | None = Depends(get_current_user)) -> list[dict[str, Any]]:
+def list_scans(
+    slug: str,
+    request: Request,
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> Response:
     with SessionLocal() as s:
         _enforce_company_access(s, current_user, slug, write=False)
-    return scan_service.list_scans(slug)
+    payload = scan_service.list_scans(slug)
+    etag = _build_etag(payload)
+    not_modified = _maybe_not_modified(request, etag)
+    if not_modified is not None:
+        return not_modified
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers={"ETag": etag, "Cache-Control": "private, max-age=0, must-revalidate"},
+    )
 
 
 @router.get("/companies/{slug}/scans/latest")
@@ -778,11 +805,22 @@ def get_company_scan_by_number(
 
 @router.get("/companies/{slug}/scans/{scan_id}/artifacts")
 def get_company_scan_artifacts(
-    slug: str, scan_id: int, current_user: CurrentUser | None = Depends(get_current_user)
-) -> dict[str, Any]:
+    slug: str,
+    scan_id: int,
+    request: Request,
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> Response:
     with SessionLocal() as s:
         _enforce_company_access(s, current_user, slug, write=False)
-    return scan_service.get_company_scan_artifacts(slug, scan_id)
+    payload = scan_service.get_company_scan_artifacts(slug, scan_id)
+    etag = _build_etag(payload)
+    not_modified = _maybe_not_modified(request, etag)
+    if not_modified is not None:
+        return not_modified
+    return JSONResponse(
+        content=jsonable_encoder(payload),
+        headers={"ETag": etag, "Cache-Control": "private, max-age=0, must-revalidate"},
+    )
 
 
 @router.delete("/companies/{slug}/scans/{scan_id}", status_code=204)

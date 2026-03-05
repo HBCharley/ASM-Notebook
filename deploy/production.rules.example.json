@@ -12,11 +12,16 @@
   "tasks": {
     "enabled": true,
     "queue": "scan-runner",
-    "dispatch_deadline_seconds": 1800
+    "dispatch_deadline_seconds": 3600
+  },
+  "cloud_run": {
+    "timeout_seconds": 3600
+  },
+  "scan": {
+    "max_seconds": 3600
   },
   "secrets": {
     "asm_database_url": "ASM_DATABASE_URL",
     "asm_tasks_secret": "ASM_TASKS_SECRET"
   }
 }
-

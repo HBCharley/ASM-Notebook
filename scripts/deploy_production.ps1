@@ -50,6 +50,16 @@ $tasksEnabled = [bool]$rules.tasks.enabled
 $tasksQueue = $rules.tasks.queue
 $tasksDeadline = [int]$rules.tasks.dispatch_deadline_seconds
 
+$cloudRunTimeout = 3600
+if ($rules.cloud_run -and $rules.cloud_run.timeout_seconds) {
+  $cloudRunTimeout = [int]$rules.cloud_run.timeout_seconds
+}
+
+$scanMaxSeconds = 3600
+if ($rules.scan -and $rules.scan.max_seconds) {
+  $scanMaxSeconds = [int]$rules.scan.max_seconds
+}
+
 $dbSecret = $rules.secrets.asm_database_url
 $tasksSecret = $rules.secrets.asm_tasks_secret
 
@@ -95,6 +105,8 @@ if ($tasksEnabled) {
   )
 }
 
+$envVars += "ASM_SCAN_MAX_SECONDS=$scanMaxSeconds"
+
 $envVarString = ($envVars -join ",")
 
 $secretArgs = @("ASM_DATABASE_URL=$($dbSecret):latest")
@@ -104,7 +116,7 @@ if ($tasksEnabled) {
 $secretString = ($secretArgs -join ",")
 
 Invoke-Step "Deploy Cloud Run (explicit env + secrets)" @"
-gcloud run deploy $service --image $image --region $region --platform managed --quiet --set-env-vars "$envVarString" --set-secrets "$secretString"
+gcloud run deploy $service --image $image --region $region --platform managed --quiet --timeout $cloudRunTimeout --set-env-vars "$envVarString" --set-secrets "$secretString"
 "@
 
 if (-not $SkipVerify) {

@@ -2012,6 +2012,10 @@ export default function App() {
   }));
   const [authReady, setAuthReady] = useState(false);
   const googleButtonRef = useRef(null);
+  const scanPollRef = useRef({ slug: null, startedAtMs: null, timer: null });
+  const scansRef = useRef(scans);
+  const selectedScanIdRef = useRef(selectedScanId);
+  const artifactsScanIdRef = useRef(artifactsScanId);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [userModalOpen, setUserModalOpen] = useState(false);
@@ -2660,6 +2664,18 @@ export default function App() {
   }, [groups]);
 
   useEffect(() => {
+    scansRef.current = scans;
+  }, [scans]);
+
+  useEffect(() => {
+    selectedScanIdRef.current = selectedScanId;
+  }, [selectedScanId]);
+
+  useEffect(() => {
+    artifactsScanIdRef.current = artifactsScanId;
+  }, [artifactsScanId]);
+
+  useEffect(() => {
     const { users: normalized, changed } = normalizeUsers(users, groups);
     if (changed) {
       setUsers(normalized);
@@ -2802,39 +2818,86 @@ export default function App() {
   useEffect(() => {
     const slug = activeCompany?.slug;
     if (!slug || !hasRunningScan) {
+      if (scanPollRef.current.timer) {
+        clearTimeout(scanPollRef.current.timer);
+      }
+      scanPollRef.current = { slug: null, startedAtMs: null, timer: null };
       return undefined;
     }
+
+    if (scanPollRef.current.slug !== slug) {
+      scanPollRef.current.slug = slug;
+      scanPollRef.current.startedAtMs = Date.now();
+    }
+    if (!scanPollRef.current.startedAtMs) {
+      scanPollRef.current.startedAtMs = Date.now();
+    }
+
     let cancelled = false;
+
+    const delayForElapsedMs = (elapsedMs) => {
+      if (elapsedMs < 120_000) return 10_000; // 0–2 minutes
+      if (elapsedMs < 300_000) return 20_000; // 2–5 minutes
+      return 60_000; // 5+ minutes
+    };
+
+    const scheduleNext = () => {
+      if (cancelled) return;
+      const startedAt = scanPollRef.current.startedAtMs || Date.now();
+      const elapsed = Date.now() - startedAt;
+      const delay = delayForElapsedMs(elapsed);
+      if (scanPollRef.current.timer) {
+        clearTimeout(scanPollRef.current.timer);
+      }
+      scanPollRef.current.timer = setTimeout(poll, delay);
+    };
+
     const poll = async () => {
       try {
-        const nextScans = await api.listScans(slug);
+        const scanResp = await api.listScansIfModified(slug);
         if (cancelled) return;
-        setScans(nextScans);
-        if (selectedScanId) {
-          const selected = nextScans.find((s) => s.id === selectedScanId);
+        const nextScans = scanResp.notModified
+          ? scansRef.current
+          : Array.isArray(scanResp.data)
+            ? scanResp.data
+            : [];
+        if (!scanResp.notModified) {
+          setScans(nextScans);
+        }
+
+        const currentSelectedScanId = selectedScanIdRef.current;
+        if (currentSelectedScanId) {
+          const selected = nextScans.find((s) => s.id === currentSelectedScanId);
           if (
             selected &&
             selected.status === "success" &&
-            artifactsScanId !== selectedScanId
+            artifactsScanIdRef.current !== currentSelectedScanId
           ) {
-            const nextArtifacts = await api.getArtifacts(slug, selectedScanId);
-            if (!cancelled) {
-              setArtifacts(nextArtifacts);
-              setArtifactsScanId(selectedScanId);
+            const artResp = await api.getArtifactsIfModified(
+              slug,
+              currentSelectedScanId
+            );
+            if (!cancelled && !artResp.notModified) {
+              setArtifacts(artResp.data);
+              setArtifactsScanId(currentSelectedScanId);
             }
           }
         }
       } catch (_err) {
         // Keep polling silent; transient failures should not spam UI toasts.
+      } finally {
+        scheduleNext();
       }
     };
+
     poll();
-    const timer = setInterval(poll, 5000);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      if (scanPollRef.current.timer) {
+        clearTimeout(scanPollRef.current.timer);
+      }
     };
-  }, [activeCompany?.slug, hasRunningScan, selectedScanId, artifactsScanId]);
+  }, [activeCompany?.slug, hasRunningScan]);
 
   return (
     <div className={`app theme-${theme}`}>

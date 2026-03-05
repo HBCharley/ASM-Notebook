@@ -40,6 +40,10 @@ class ScanCancelled(Exception):
     pass
 
 
+class ScanTimeout(Exception):
+    pass
+
+
 def _is_cancelled(scan_id: int) -> bool:
     return scan_id in _CANCELLED_SCANS
 
@@ -78,6 +82,20 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)).strip())
     except Exception:
         return default
+
+
+def _scan_deadline_at(t0: float) -> float | None:
+    max_seconds = _env_int("ASM_SCAN_MAX_SECONDS", 3600)
+    if max_seconds <= 0:
+        return None
+    return t0 + float(max_seconds)
+
+
+def _check_deadline(deadline_at: float | None) -> None:
+    if deadline_at is None:
+        return
+    if perf_counter() > deadline_at:
+        raise ScanTimeout("Scan exceeded max duration")
 
 
 def _scan_limits(role: str) -> dict[str, int]:
@@ -1076,6 +1094,7 @@ async def _collect_scan_data(
     deep_scan: bool = False,
     cancel_check: Callable[[], bool] | None = None,
     previous_ct_by_root: dict[str, list[str]] | None = None,
+    deadline_at: float | None = None,
 ) -> tuple[
     list[str],
     list[str],
@@ -1090,16 +1109,20 @@ async def _collect_scan_data(
     previous_ct_by_root = previous_ct_by_root or {}
     if cancel_check():
         raise ScanCancelled()
+    _check_deadline(deadline_at)
     progress_cb(2, 6, "Collecting in-scope domains from CT")
     domains: set[str] = set()
     domains.update(roots)
     roots_list = sorted(roots)
+    _check_deadline(deadline_at)
     ct_results = await asyncio.gather(*[ct_subdomains(root) for root in roots_list])
     if cancel_check():
         raise ScanCancelled()
+    _check_deadline(deadline_at)
     ct_domains_by_root: dict[str, list[str]] = {}
     reused_roots: list[str] = []
     for root, result in zip(roots_list, ct_results):
+        _check_deadline(deadline_at)
         fallback = set(previous_ct_by_root.get(root) or [])
         result_set = set(result or [])
         merged = result_set | fallback
@@ -1113,6 +1136,7 @@ async def _collect_scan_data(
     dns_records: list[dict[str, Any]] = []
     cname_resolves: dict[str, bool] = {}
     for domain in domains_sorted:
+        _check_deadline(deadline_at)
         if cancel_check():
             raise ScanCancelled()
         rec = resolve_dns(domain, include_ptr=deep_scan)
@@ -1132,6 +1156,7 @@ async def _collect_scan_data(
     slow_threshold = _env_int("ASM_HTTP_SLOW_SECONDS", 5)
     t_http_total = perf_counter()
     for domain in resolvable_domains:
+        _check_deadline(deadline_at)
         if cancel_check():
             raise ScanCancelled()
         t_domain = perf_counter()
@@ -1156,6 +1181,7 @@ async def _collect_scan_data(
     progress_cb(2, 6, "Resolving root wildcards")
     wildcard_roots: dict[str, bool] = {}
     for root in roots:
+        _check_deadline(deadline_at)
         if cancel_check():
             raise ScanCancelled()
         wildcard = f"*.{root}"
@@ -1235,6 +1261,7 @@ def _execute_scan(
     roots_set = set(roots)
     timings: dict[str, float] = {}
     t0 = perf_counter()
+    deadline_at = _scan_deadline_at(t0)
     logger.info(
         "Scan start id=%s roots=%s deep_scan=%s",
         scan_id,
@@ -1243,6 +1270,7 @@ def _execute_scan(
     )
 
     def set_progress(step: int, total: int, message: str) -> None:
+        _check_deadline(deadline_at)
         with SessionLocal() as s:
             scan = s.get(ScanRun, scan_id)
             if not scan:
@@ -1289,6 +1317,7 @@ def _execute_scan(
                     deep_scan=deep_scan,
                     cancel_check=lambda: _is_cancelled(scan_id),
                     previous_ct_by_root=prev_ct_by_root,
+                    deadline_at=deadline_at,
                 )
             )
             timings["ct_dns_http_seconds"] = round(perf_counter() - t_step, 3)
