@@ -900,6 +900,7 @@ def _domain_intel(
         "reachable": bool((web or {}).get("reachable")),
         "scheme": (web or {}).get("scheme", ""),
         "status_code": (web or {}).get("status_code"),
+        "response_time_ms": (web or {}).get("response_time_ms"),
         "final_url": (web or {}).get("final_url", ""),
         "title": (web or {}).get("title", ""),
         "security_headers": (web or {}).get("security_headers") or {},

@@ -9,6 +9,12 @@ function daysUntil(dateValue) {
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
+function formatResponseTimeMs(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return `${Math.round(ms)}ms`;
+}
+
 export function buildDrilldownPayload({
   artifacts,
   roots,
@@ -86,9 +92,13 @@ export function buildDrilldownPayload({
     .filter((row) => row?.web?.reachable || Number(row?.web?.status_code ?? 0) > 0)
     .map((row) => ({
       title: row.domain || "domain",
-      meta: `HTTP ${row?.web?.status_code ?? "-"} · ${
-        row?.web?.title ? row.web.title.slice(0, 44) : "reachable"
-      }`,
+      meta: (() => {
+        const rtt = formatResponseTimeMs(row?.web?.response_time_ms);
+        const title = row?.web?.title ? row.web.title.slice(0, 44) : "reachable";
+        return `HTTP ${row?.web?.status_code ?? "-"}${
+          rtt ? ` · ${rtt}` : ""
+        } · ${title}`;
+      })(),
     }))
     .slice(0, 120);
 

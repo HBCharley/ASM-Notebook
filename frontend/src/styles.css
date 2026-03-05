@@ -2608,6 +2608,11 @@ button.danger.ghost {
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--card) 85%, transparent);
   font-size: 13px;
+  color: var(--ink);
+  text-align: left;
+  text-transform: none;
+  letter-spacing: normal;
+  font-family: inherit;
 }
 
 .exec-modal-meta {

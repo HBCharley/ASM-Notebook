@@ -282,9 +282,11 @@ export default function SocDashboard({
       cert?.validUntil ||
       "";
     const tlsDays = daysUntil(notAfter);
+    const responseTimeMs = Number(row?.web?.response_time_ms);
     return {
       host: row.domain || "domain",
       status: row?.web?.status_code ?? "-",
+      responseTime: Number.isFinite(responseTimeMs) && responseTimeMs > 0 ? `${Math.round(responseTimeMs)}ms` : "-",
       server:
         row?.web?.server ||
         (row?.web?.technologies || [])[0] ||
@@ -639,7 +641,7 @@ export default function SocDashboard({
                   >
                     <span>{row.host}</span>
                     <span className="soc-table-meta">
-                      {row.status} · {row.server} · TLS {row.tlsDays} · {row.redirect}
+                      {row.status} · {row.responseTime} · {row.server} · TLS {row.tlsDays} · {row.redirect}
                     </span>
                   </button>
                 ))}

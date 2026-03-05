@@ -598,7 +598,9 @@ async def fetch_http_metadata(
         for scheme in ("https", "http"):
             url = f"{scheme}://{domain}"
             try:
+                t_req = time.perf_counter()
                 resp = await client.get(url)
+                response_time_ms = int(round((time.perf_counter() - t_req) * 1000))
                 content_type = (resp.headers.get("content-type") or "").lower()
                 body = ""
                 title = ""
@@ -680,6 +682,7 @@ async def fetch_http_metadata(
                     "scheme": scheme,
                     "final_url": str(resp.url),
                     "status_code": resp.status_code,
+                    "response_time_ms": response_time_ms,
                     "title": title,
                     "headers": interesting,
                     "security_headers": security_headers,
