@@ -1,746 +1,1056 @@
-import React, { useMemo, useState } from "react";
-import { DrilldownModal, useDrilldown } from "../../lib/drilldown.jsx";
-import { countFindingsBySeverity, filterFindings } from "../../lib/cveSeverity.js";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../../api.js";
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
-}
+const PREF_KEY = "soc.filters.v1";
+const LOCAL_KEY = "asm.soc.filters.v1";
 
 function formatCount(value) {
   if (!Number.isFinite(value)) return "0";
   return value.toLocaleString();
 }
 
-function daysUntil(dateValue) {
-  if (!dateValue) return null;
-  const dt = new Date(dateValue);
-  if (Number.isNaN(dt.getTime())) return null;
-  const diff = dt.getTime() - Date.now();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+function safeJsonParse(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
 }
 
-export default function SocDashboard({
-  activeCompany,
-  activeScan,
-  artifacts,
-  scans,
-  selectedScanId,
-  hasRunningScan,
-  runningScan,
-  scanProgress,
-  deepScan,
-  minCveSeverity,
-  onToggleDeepScan,
-  onManageDetails,
-  onLoadLatest,
-  onStartScan,
-  onSelectScan,
-  onDeleteScan,
-  onDeleteCompany,
-  onExportArtifacts,
-  onOpenDetails,
-  onChangeViewMode,
-  canManageCompany,
-  canStartScan,
-  canDeleteScan,
-}) {
-  const roots = artifacts?.domains?.roots || [];
-  const allDomains = artifacts?.domains?.domains || [];
-  const rootSet = useMemo(() => new Set(roots), [roots]);
-  const discovered = allDomains.filter((d) => !rootSet.has(d));
-  const totalDomains = roots.length + discovered.length;
+function formatIso(value) {
+  if (!value) return "";
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return String(value);
+  return dt.toLocaleString();
+}
 
-  const dnsRecords = artifacts?.dns?.records || [];
-  const uniqueIps = useMemo(() => {
-    const set = new Set();
-    dnsRecords.forEach((rec) => {
-      (rec?.ips || []).forEach((ip) => set.add(ip));
-    });
-    return set;
-  }, [dnsRecords]);
-  const publicIps = uniqueIps.size || artifacts?.dns?.summary?.unique_ip_count || 0;
+function computePollMs(elapsedMs) {
+  if (elapsedMs < 2 * 60 * 1000) return 10_000;
+  if (elapsedMs < 5 * 60 * 1000) return 20_000;
+  return 60_000;
+}
 
-  const intelDomains = artifacts?.dns_intel?.domains || [];
-  const webHosts = intelDomains.filter(
-    (row) => row?.web?.reachable || Number(row?.web?.status_code ?? 0) > 0
-  ).length;
-  const allCveFindings = useMemo(() => {
-    const items = [];
-    intelDomains.forEach((row) => {
-      (row?.cve_findings || []).forEach((entry) => items.push(entry));
-    });
-    return items;
-  }, [intelDomains]);
-  const visibleCveFindings = useMemo(
-    () => filterFindings(allCveFindings, minCveSeverity),
-    [allCveFindings, minCveSeverity]
+function findFirstBySeverity(counts) {
+  if (!counts) return "";
+  if (counts.critical) return "critical";
+  if (counts.investigate) return "investigate";
+  if (counts.watch) return "watch";
+  if (counts.info) return "info";
+  return "";
+}
+
+function SeverityBadge({ severity, value }) {
+  if (!value) return null;
+  const cls =
+    severity === "critical"
+      ? "soc2-badge soc2-critical"
+      : severity === "investigate"
+        ? "soc2-badge soc2-investigate"
+        : severity === "watch"
+          ? "soc2-badge soc2-watch"
+          : "soc2-badge soc2-info";
+  return <span className={cls}>{value}</span>;
+}
+
+function Tile({ label, value, accent, active, onClick, title }) {
+  return (
+    <button
+      type="button"
+      className={`soc2-tile ${accent || ""} ${active ? "active" : ""}`.trim()}
+      onClick={onClick}
+      title={title || ""}
+    >
+      <div className="soc2-tile-label">{label}</div>
+      <div className="soc2-tile-value">{formatCount(value)}</div>
+    </button>
   );
-  const cveCounts = useMemo(
-    () => countFindingsBySeverity(visibleCveFindings),
-    [visibleCveFindings]
+}
+
+function DrawerSection({ title, children }) {
+  return (
+    <div className="soc2-drawer-section">
+      <div className="soc2-drawer-section-title">{title}</div>
+      {children}
+    </div>
   );
-  const criticalCves = cveCounts.Critical;
+}
 
-  const exposureScoreAvg = artifacts?.dns_intel?.summary?.exposure_score_avg;
-  const exposureScoreFallback = intelDomains.length
-    ? intelDomains.reduce((sum, row) => sum + (row?.exposure_score || 0), 0) /
-      intelDomains.length
-    : 0;
-  const exposureScore = clamp(
-    Math.round(
-      Number.isFinite(exposureScoreAvg) ? exposureScoreAvg : exposureScoreFallback
-    ),
-    0,
-    100
+function KeyValue({ label, value }) {
+  if (value === null || typeof value === "undefined" || value === "") return null;
+  return (
+    <div className="soc2-kv">
+      <div className="soc2-kv-label">{label}</div>
+      <div className="soc2-kv-value">{String(value)}</div>
+    </div>
   );
+}
 
-  const edgeDomains = intelDomains.filter((row) => {
-    const provider = row?.web?.edge_provider?.provider;
-    return provider && provider !== "none";
-  }).length;
-  const cdnCoverage = intelDomains.length
-    ? Math.round((edgeDomains / intelDomains.length) * 100)
-    : 0;
+export default function SocDashboard(props) {
+  const {
+    activeCompany,
+    activeScan,
+    selectedScanId,
+    hasRunningScan,
+    deepScan,
+    onToggleDeepScan,
+    onManageDetails,
+    onLoadLatest,
+    onStartScan,
+    onOpenDetails,
+    onChangeViewMode,
+    canManageCompany,
+    canStartScan,
+  } = props;
 
-  const mailSummary = artifacts?.dns_intel?.summary || {};
-  const missingDmarc =
-    Number(mailSummary.mail_enabled_domains ?? 0) -
-    Number(mailSummary.dmarc_domains ?? 0);
+  const [soc, setSoc] = useState(null);
+  const [socError, setSocError] = useState("");
+  const [socLoading, setSocLoading] = useState(false);
 
-  const changeSummary = artifacts?.change_summary || null;
-  const newDomains = changeSummary?.new_domains || [];
-  const removedDomains = changeSummary?.removed_domains || [];
-  const techChanges = changeSummary?.technology_changes || [];
-  const providerChanges = changeSummary?.provider_changes || [];
+  const [filters, setFilters] = useState(() => ({
+    showUnresolved: false,
+    showNonWeb: false,
+    changedOnly: false,
+    search: "",
+    tileFilter: "",
+    severities: { critical: true, investigate: true, watch: true, info: true },
+    categories: [],
+  }));
 
-  const originExposure = intelDomains.filter(
-    (row) =>
-      row?.web?.reachable &&
-      (!row?.web?.edge_provider?.provider ||
-        row?.web?.edge_provider?.provider === "none")
-  ).length;
+  const [sort, setSort] = useState({ key: "priority", dir: "asc" });
+  const [selectedHost, setSelectedHost] = useState("");
+  const [drawerTab, setDrawerTab] = useState("overview");
+  const [assetDetail, setAssetDetail] = useState(null);
+  const [assetDetailError, setAssetDetailError] = useState("");
+  const [assetDetailLoading, setAssetDetailLoading] = useState(false);
 
-  const riskCounts = useMemo(() => {
-    const counts = { critical: 0, high: 0, medium: 0, low: 0 };
-    intelDomains.forEach((row) => {
-      const score = Number(row?.exposure_score ?? 0);
-      if (score >= 80) counts.critical += 1;
-      else if (score >= 60) counts.high += 1;
-      else if (score >= 30) counts.medium += 1;
-      else counts.low += 1;
-    });
-    return counts;
-  }, [intelDomains]);
+  const pollStartRef = useRef(0);
+  const pollTimerRef = useRef(null);
+  const mountedRef = useRef(false);
 
-  const findings = useMemo(() => {
-    const items = [];
-    if (criticalCves) {
-      items.push({
-        id: "critical-cves",
-        title: "Critical CVEs detected",
-        severity: "critical",
-        count: criticalCves,
-        lastSeen: activeScan?.company_scan_number || "-",
-        category: "vulns",
-        action: "Review vulnerabilities",
-      });
-    }
-    if (originExposure) {
-      items.push({
-        id: "origin-exposure",
-        title: "Origin exposed (no CDN)",
-        severity: "high",
-        count: originExposure,
-        lastSeen: activeScan?.company_scan_number || "-",
-        category: "infra",
-        action: "Inspect edge coverage",
-      });
-    }
-    const adminHosts = allDomains.filter((d) =>
-      /(admin|staging|dev|test)/i.test(d)
+  const scanId = selectedScanId || soc?.scan?.id || null;
+  const scanLabel = soc?.scan?.company_scan_number
+    ? `Scan #${soc.scan.company_scan_number}`
+    : soc?.scan?.id
+      ? `Scan ${soc.scan.id}`
+      : "";
+
+  async function loadFilters() {
+    const local = safeJsonParse(
+      typeof window !== "undefined" ? window.localStorage.getItem(LOCAL_KEY) : "",
+      null
     );
-    if (adminHosts.length) {
-      items.push({
-        id: "admin-hosts",
-        title: "Admin / staging hostnames",
-        severity: "high",
-        count: adminHosts.length,
-        lastSeen: activeScan?.company_scan_number || "-",
-        category: "web",
-        action: "Review risky hostnames",
-      });
+    if (local) {
+      setFilters((prev) => ({ ...prev, ...local }));
     }
-    if (missingDmarc > 0) {
-      items.push({
-        id: "email-posture",
-        title: "Email posture issues",
-        severity: "medium",
-        count: missingDmarc,
-        lastSeen: activeScan?.company_scan_number || "-",
-        category: "email",
-        action: "Review DMARC coverage",
-      });
+    try {
+      const resp = await api.getPreference(PREF_KEY);
+      if (resp?.value && typeof resp.value === "object") {
+        setFilters((prev) => ({ ...prev, ...resp.value }));
+      }
+    } catch {
+      // Public or auth unavailable: localStorage remains the source of truth.
     }
-    if (newDomains.length || techChanges.length || providerChanges.length) {
-      items.push({
-        id: "major-changes",
-        title: "Major changes detected",
-        severity: "medium",
-        count: newDomains.length + techChanges.length + providerChanges.length,
-        lastSeen: activeScan?.company_scan_number || "-",
-        category: "changes",
-        action: "Review change summary",
-      });
+  }
+
+  function persistFilters(next) {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
     }
-    return items;
-  }, [
-    criticalCves,
-    originExposure,
-    allDomains,
-    missingDmarc,
-    newDomains.length,
-    techChanges.length,
-    providerChanges.length,
-    activeScan?.company_scan_number,
-  ]);
+    api.setPreference(PREF_KEY, next).catch(() => {});
+  }
 
-  const [queueFilter, setQueueFilter] = useState("all");
-  const [queueSearch, setQueueSearch] = useState("");
+  async function loadSocOverview({ ifModified = false } = {}) {
+    if (!activeCompany?.slug) return;
+    setSocError("");
+    if (!ifModified) setSocLoading(true);
+    try {
+      if (ifModified) {
+        const res = await api.getSocOverviewIfModified(activeCompany.slug, scanId);
+        if (!res?.notModified && res?.data) setSoc(res.data);
+      } else {
+        const data = await api.getSocOverview(activeCompany.slug, scanId);
+        setSoc(data);
+      }
+    } catch (err) {
+      setSocError(err?.message || "Failed to load SOC view");
+    } finally {
+      if (!ifModified) setSocLoading(false);
+    }
+  }
 
-  const queueItems = findings.filter((item) => {
-    if (queueFilter === "all") return true;
-    if (queueFilter === "critical") return item.severity === "critical";
-    if (queueFilter === "high") return item.severity === "high";
-    if (queueFilter === "changes") return item.category === "changes";
-    if (queueFilter === "infra") return item.category === "infra";
-    if (queueFilter === "web") return item.category === "web";
-    if (queueFilter === "email") return item.category === "email";
-    return true;
-  }).filter((item) =>
-    item.title.toLowerCase().includes(queueSearch.trim().toLowerCase())
-  );
+  async function loadAssetDetail(hostname, { ifModified = false } = {}) {
+    if (!activeCompany?.slug || !hostname) return;
+    setAssetDetailError("");
+    if (!ifModified) setAssetDetailLoading(true);
+    try {
+      if (ifModified) {
+        const res = await api.getSocAssetDetailIfModified(
+          activeCompany.slug,
+          hostname,
+          scanId
+        );
+        if (!res?.notModified && res?.data) setAssetDetail(res.data);
+      } else {
+        const data = await api.getSocAssetDetail(activeCompany.slug, hostname, scanId);
+        setAssetDetail(data);
+      }
+    } catch (err) {
+      setAssetDetailError(err?.message || "Failed to load asset details");
+    } finally {
+      if (!ifModified) setAssetDetailLoading(false);
+    }
+  }
 
-  const domainRows = allDomains.map((domain) => {
-    const intel = intelDomains.find((row) => row.domain === domain);
-    const provider = intel?.web?.edge_provider?.provider || "-";
-    const status =
-      newDomains.includes(domain)
-        ? "new"
-        : removedDomains.includes(domain)
-          ? "removed"
-          : "-";
-    return {
-      key: domain,
-      domain,
-      type: rootSet.has(domain) ? "root" : "sub",
-      status,
-      provider,
-      responder: intel?.web?.reachable ? "yes" : "no",
+  useEffect(() => {
+    if (mountedRef.current) return;
+    mountedRef.current = true;
+    loadFilters();
+  }, []);
+
+  useEffect(() => {
+    loadSocOverview();
+  }, [activeCompany?.slug, selectedScanId]);
+
+  useEffect(() => {
+    if (!selectedHost) {
+      setAssetDetail(null);
+      setAssetDetailError("");
+      return;
+    }
+    setDrawerTab("overview");
+    loadAssetDetail(selectedHost);
+  }, [selectedHost, activeCompany?.slug, selectedScanId]);
+
+  useEffect(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    const running = Boolean(hasRunningScan || (activeScan?.status || "") === "running");
+    if (!running) return;
+
+    pollStartRef.current = Date.now();
+    const tick = async () => {
+      const elapsed = Date.now() - pollStartRef.current;
+      if (elapsed > 60 * 60 * 1000) {
+        return;
+      }
+      await loadSocOverview({ ifModified: true });
+      if (selectedHost) await loadAssetDetail(selectedHost, { ifModified: true });
+      pollTimerRef.current = setTimeout(tick, computePollMs(elapsed));
     };
-  });
+    pollTimerRef.current = setTimeout(tick, 5_000);
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    };
+  }, [hasRunningScan, activeScan?.status, selectedHost, activeCompany?.slug, selectedScanId]);
 
-  const ipRows = useMemo(() => {
-    const map = new Map();
-    dnsRecords.forEach((rec) => {
-      (rec?.ips || []).forEach((ip) => {
-        const next = map.get(ip) || { ip, domains: new Set(), asn: "-", country: "-" };
-        if (rec?.domain) next.domains.add(rec.domain);
-        map.set(ip, next);
-      });
-    });
-    intelDomains.forEach((row) => {
-      (row?.ip_asn || []).forEach((entry) => {
-        if (!entry?.ip) return;
-        const next = map.get(entry.ip) || {
-          ip: entry.ip,
-          domains: new Set(),
-          asn: "-",
-          country: "-",
-        };
-        next.asn = entry.asn_org || entry.asn || next.asn;
-        next.country = entry.country || next.country;
-        map.set(entry.ip, next);
-      });
-    });
-    return Array.from(map.values()).map((row) => ({
-      ip: row.ip,
-      asn: row.asn,
-      country: row.country,
-      domainCount: row.domains.size,
-      origin: "mixed",
+  useEffect(() => {
+    const id = setTimeout(() => {
+      persistFilters(filters);
+    }, 350);
+    return () => clearTimeout(id);
+  }, [filters]);
+
+  const assets = soc?.assets || [];
+  const findings = soc?.findings || [];
+
+  function toggleTileFilter(key) {
+    setFilters((prev) => ({
+      ...prev,
+      tileFilter: prev.tileFilter === key ? "" : key,
     }));
-  }, [dnsRecords, intelDomains]);
+  }
 
-  const webRows = intelDomains.map((row) => {
-    const tls = row?.web?.tls || {};
-    const cert =
-      tls?.cert || tls?.certificate || tls || {};
-    const notAfter =
-      cert?.not_after ||
-      cert?.notAfter ||
-      cert?.valid_until ||
-      cert?.validUntil ||
-      "";
-    const tlsDays = daysUntil(notAfter);
-    const responseTimeMs = Number(row?.web?.response_time_ms);
-    return {
-      host: row.domain || "domain",
-      status: row?.web?.status_code ?? "-",
-      responseTime: Number.isFinite(responseTimeMs) && responseTimeMs > 0 ? `${Math.round(responseTimeMs)}ms` : "-",
-      server:
-        row?.web?.server ||
-        (row?.web?.technologies || [])[0] ||
-        "-",
-      tlsDays: tlsDays !== null ? `${tlsDays}d` : "-",
-      redirect:
-        row?.web?.redirect_target ||
-        row?.web?.redirects?.[0] ||
-        "-",
-    };
-  });
+  const effectiveVisibility = useMemo(() => {
+    const tile = filters.tileFilter || "";
+    if (!tile) return { showUnresolved: filters.showUnresolved, showNonWeb: filters.showNonWeb };
 
-  const vulnRows = intelDomains
-    .map((row) => {
-      const findings = filterFindings(row?.cve_findings || [], minCveSeverity);
-      const top = findings[0] || {};
-      return {
-        host: row.domain || "domain",
-        component: top.component || "-",
-        version: top.version || "-",
-        cvss: top.score ?? "-",
-        count: findings.length,
-      };
-    })
-    .filter((row) => row.count > 0);
+    // Tile filters should show exactly the set behind the metric.
+    // That means temporarily overriding the default "hide unresolved/non-web" behavior.
+    if (tile === "assets") return { showUnresolved: true, showNonWeb: true };
+    if (tile === "live_web") return { showUnresolved: true, showNonWeb: true };
+    if (tile === "unresolved") return { showUnresolved: true, showNonWeb: true };
+    if (tile === "missing_hsts") return { showUnresolved: true, showNonWeb: true };
+    if (tile === "changed") return { showUnresolved: true, showNonWeb: true };
+    return { showUnresolved: filters.showUnresolved, showNonWeb: filters.showNonWeb };
+  }, [filters.showUnresolved, filters.showNonWeb, filters.tileFilter]);
 
-  const [scopeTab, setScopeTab] = useState("domains");
+  const filteredAssets = useMemo(() => {
+    let list = Array.isArray(assets) ? assets.slice() : [];
+    if (!effectiveVisibility.showUnresolved) list = list.filter((a) => a?.resolves);
+    if (!effectiveVisibility.showNonWeb) list = list.filter((a) => a?.web_reachable);
 
-  const timeline = scans.slice(0, 10);
-
-  const tlsSoonCount = intelDomains.reduce((sum, row) => {
-    const cert =
-      row?.web?.tls?.cert || row?.web?.tls?.certificate || row?.web?.tls || null;
-    const exp =
-      cert?.not_after ||
-      cert?.notAfter ||
-      cert?.valid_until ||
-      cert?.validUntil ||
-      "";
-    const remaining = daysUntil(exp);
-    if (remaining !== null && remaining <= 30) return sum + 1;
-    return sum;
-  }, 0);
-
-  const { detailOpen, detailContent, openDetail, closeDetail } = useDrilldown({
-    artifacts,
-    roots,
-    discovered,
-    totalDomains,
-    webHosts,
-    publicIps,
-    uniqueIps,
-    cdnCoverage,
-    findings: findings.map((item) => ({
-      label: item.title,
-      action: item.action,
-    })),
-    recentChanges: (changeSummary?.has_previous
-      ? [
-          { label: "New domains", count: newDomains.length, sample: newDomains.slice(0, 3) },
-          { label: "Removed domains", count: removedDomains.length, sample: removedDomains.slice(0, 3) },
-          { label: "Provider changes", count: providerChanges.length, sample: providerChanges.slice(0, 3) },
-          { label: "Tech changes", count: techChanges.length, sample: techChanges.slice(0, 3) },
-        ]
-      : []),
-    mailSummary,
-    tlsSoonCount,
-    riskCounts,
-    minCveSeverity,
-  });
-
-  const triageItems = [
-    {
-      key: "domains_added",
-      label: "New domains",
-      value: newDomains.length,
-      color: "soc-accent-purple",
-      detailKey: "domains_added",
-    },
-    {
-      key: "ips_new",
-      label: "New public IPs",
-      value: changeSummary?.new_ips?.length ?? 0,
-      color: "soc-accent-blue",
-      detailKey: "ips_new",
-    },
-    {
-      key: "web_new",
-      label: "New HTTP responders",
-      value: changeSummary?.new_http?.length ?? 0,
-      color: "soc-accent-green",
-      detailKey: "web_new",
-    },
-    {
-      key: "cves",
-      label: "Critical CVEs",
-      value: criticalCves,
-      color: "soc-accent-red",
-      detailKey: "vulnerabilities",
-    },
-    {
-      key: "origin",
-      label: "Origin exposure",
-      value: originExposure,
-      color: "soc-accent-orange",
-      detailKey: "origin_exposure",
-    },
-    {
-      key: "email",
-      label: "Email posture",
-      value: missingDmarc > 0 ? missingDmarc : 0,
-      color: "soc-accent-yellow",
-      detailKey: "email_issues",
-    },
-  ];
-
-  const copySummary = () => {
-    const summary = [
-      `SOC summary for ${activeCompany?.slug || "-"}`,
-      `Scan #${activeScan?.company_scan_number || "-"} (id ${activeScan?.id ?? "-"})`,
-      `New domains: ${newDomains.length}`,
-      `Critical CVEs: ${criticalCves}`,
-      `Origin exposure: ${originExposure}`,
-      `DMARC issues: ${missingDmarc > 0 ? missingDmarc : 0}`,
-    ].join("\n");
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(summary);
+    const tile = filters.tileFilter || "";
+    if (tile === "assets") {
+      // no-op; visibility override already ensures "all assets"
+    } else if (tile === "live_web") {
+      list = list.filter((a) => a?.web_reachable);
+    } else if (tile === "unresolved") {
+      list = list.filter((a) => !a?.resolves);
+    } else if (tile === "missing_hsts") {
+      list = list.filter((a) => a?.tls_present && !a?.hsts_present);
+    } else if (tile === "changed") {
+      list = list.filter((a) => (a?.change?.state || "") !== "unchanged");
     }
-  };
+
+    if (filters.changedOnly)
+      list = list.filter((a) => (a?.change?.state || "") !== "unchanged");
+    const q = (filters.search || "").trim().toLowerCase();
+    if (q) {
+      list = list.filter((a) => {
+        const hay = [
+          a?.hostname,
+          a?.root_domain,
+          a?.title,
+          a?.final_url,
+          a?.provider_hint,
+          a?.edge_family,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      });
+    }
+    return list;
+  }, [assets, effectiveVisibility.showNonWeb, effectiveVisibility.showUnresolved, filters]);
+
+  const sortedAssets = useMemo(() => {
+    const list = filteredAssets.slice();
+    const dir = sort.dir === "desc" ? -1 : 1;
+    const key = sort.key;
+    list.sort((a, b) => {
+      if (key === "hostname") return String(a.hostname).localeCompare(String(b.hostname)) * dir;
+      if (key === "root_domain") return String(a.root_domain).localeCompare(String(b.root_domain)) * dir;
+      if (key === "status_code") return (Number(a.status_code || 0) - Number(b.status_code || 0)) * dir;
+      if (key === "ip_count") return (Number(a.ip_count || 0) - Number(b.ip_count || 0)) * dir;
+      if (key === "changed") {
+        const av = (a?.change?.state || "") === "unchanged" ? 0 : 1;
+        const bv = (b?.change?.state || "") === "unchanged" ? 0 : 1;
+        return (av - bv) * dir;
+      }
+      const aCounts = a?.finding_counts || {};
+      const bCounts = b?.finding_counts || {};
+      const aPriority =
+        (aCounts.critical || 0) * 1000 +
+        (aCounts.investigate || 0) * 100 +
+        (aCounts.watch || 0) * 10 +
+        (aCounts.info || 0);
+      const bPriority =
+        (bCounts.critical || 0) * 1000 +
+        (bCounts.investigate || 0) * 100 +
+        (bCounts.watch || 0) * 10 +
+        (bCounts.info || 0);
+      return (aPriority - bPriority) * dir;
+    });
+    return list;
+  }, [filteredAssets, sort]);
+
+  const visibleFindings = useMemo(() => {
+    let list = Array.isArray(findings) ? findings.slice() : [];
+    list = list.filter((f) => filters.severities?.[f.severity] !== false);
+    if (filters.categories?.length) {
+      const set = new Set(filters.categories);
+      list = list.filter((f) => set.has(f.category));
+    }
+    return list;
+  }, [findings, filters]);
+
+  const findingCategories = useMemo(() => {
+    const set = new Set();
+    (findings || []).forEach((f) => {
+      if (f?.category) set.add(f.category);
+    });
+    return Array.from(set).sort();
+  }, [findings]);
+
+  const summary = soc?.summary || {};
+  const scanMeta = soc?.scan || null;
+  const prevMeta = soc?.previous_scan || null;
 
   return (
-    <section className="soc-dashboard">
-      <div className="soc-header">
+    <div className="soc2">
+      <div className="soc2-header">
         <div>
-          <div className="soc-title">SOC Analyst</div>
-          <div className="soc-subtitle">
-            {activeCompany?.name || "No active customer"}
-            {activeScan?.company_scan_number
-              ? ` · Scan #${activeScan.company_scan_number}`
+          <div className="soc2-title">SOC Analyst Workspace</div>
+          <div className="soc2-subtitle">
+            {activeCompany?.name || activeCompany?.slug || "No company selected"}
+            {scanLabel ? ` · ${scanLabel}` : ""}
+            {scanMeta?.status ? ` · ${scanMeta.status}` : ""}
+            {prevMeta?.company_scan_number
+              ? ` · Prev #${prevMeta.company_scan_number}`
               : ""}
-            {activeScan?.id ? ` (id ${activeScan.id})` : ""}
           </div>
         </div>
-        <div className="soc-actions">
-          <label className="exec-toggle">
+        <div className="soc2-actions">
+          <button className="btn" onClick={() => onChangeViewMode?.("exec")}>
+            Executive
+          </button>
+          <button className="btn" onClick={onOpenDetails}>
+            Scans
+          </button>
+          <button
+            className="btn"
+            onClick={onManageDetails}
+            disabled={!canManageCompany}
+          >
+            Manage
+          </button>
+          <button className="btn" onClick={onLoadLatest}>
+            Load latest
+          </button>
+          <button
+            className="btn primary"
+            onClick={onStartScan}
+            disabled={!canStartScan}
+          >
+            Start scan
+          </button>
+          <label className="soc2-toggle">
             <input
               type="checkbox"
-              checked={!!deepScan}
+              checked={Boolean(deepScan)}
               onChange={(e) => onToggleDeepScan?.(e.target.checked)}
             />
-            <span>Deep scan</span>
+            Deep scan
           </label>
-          <button className="ghost" onClick={onManageDetails} disabled={!canManageCompany}>
-            Manage details
-          </button>
-          <button onClick={onLoadLatest}>Load latest scan</button>
-          <button className="ghost" onClick={onStartScan} disabled={!canStartScan}>
-            Start new scan
-          </button>
         </div>
       </div>
 
-      {hasRunningScan ? (
-        <div className="exec-status">
-          <div className="exec-status-title">
-            Scan in progress{runningScan?.scan_mode ? ` · ${runningScan.scan_mode}` : ""}
+      {socError ? <div className="soc2-error">{socError}</div> : null}
+
+      <div className="soc2-tiles">
+        <Tile
+          label="Assets"
+          value={summary.assets_discovered || 0}
+          accent="soc2-accent-blue"
+          active={filters.tileFilter === "assets"}
+          onClick={() => toggleTileFilter("assets")}
+          title="Filter: all assets (includes unresolved and non-web)"
+        />
+        <Tile
+          label="Live web"
+          value={summary.live_web_assets || 0}
+          accent="soc2-accent-green"
+          active={filters.tileFilter === "live_web"}
+          onClick={() => toggleTileFilter("live_web")}
+          title="Filter: web reachable assets"
+        />
+        <Tile
+          label="Unresolved"
+          value={summary.unresolved_assets || 0}
+          accent="soc2-accent-orange"
+          active={filters.tileFilter === "unresolved"}
+          onClick={() => toggleTileFilter("unresolved")}
+          title="Filter: unresolved assets"
+        />
+        <Tile
+          label="Critical assets"
+          value={summary.assets_with_critical_findings || 0}
+          accent="soc2-accent-red"
+        />
+        <Tile
+          label="Investigate assets"
+          value={summary.assets_with_investigate_findings || 0}
+          accent="soc2-accent-purple"
+        />
+        <Tile
+          label="Missing HSTS"
+          value={summary.missing_hsts_assets || 0}
+          active={filters.tileFilter === "missing_hsts"}
+          onClick={() => toggleTileFilter("missing_hsts")}
+          title="Filter: TLS present but HSTS missing"
+        />
+        <Tile
+          label="Changed"
+          value={summary.assets_changed || 0}
+          active={filters.tileFilter === "changed"}
+          onClick={() => toggleTileFilter("changed")}
+          title="Filter: assets that changed vs previous scan"
+        />
+        <Tile label="Removed" value={summary.removed_assets || 0} />
+      </div>
+
+      <div className="soc2-stack">
+        <div className="soc2-panel soc2-panel-findings">
+          <div className="soc2-panel-head">
+            <div className="soc2-panel-title">Findings</div>
+            <div className="soc2-panel-meta">
+              {formatCount(visibleFindings.length)} shown
+            </div>
           </div>
-          <div className="exec-status-bar">
-            <span
-              className={`exec-status-fill ${
-                scanProgress?.indeterminate ? "indeterminate" : "determinate"
-              }`}
-              style={
-                scanProgress?.indeterminate
-                  ? undefined
-                  : { width: `${scanProgress?.percent ?? 0}%` }
+
+          <div className="soc2-findings-filters soc2-findings-filters-wide">
+            <div className="soc2-sev-toggles">
+              {["critical", "investigate", "watch", "info"].map((sev) => (
+                <button
+                  key={sev}
+                  type="button"
+                  className={`soc2-chip ${
+                    filters.severities?.[sev] !== false ? "active" : ""
+                  }`.trim()}
+                  aria-pressed={filters.severities?.[sev] !== false}
+                  onClick={() =>
+                    setFilters((prev) => ({
+                      ...prev,
+                      severities: {
+                        ...prev.severities,
+                        [sev]: !(prev.severities?.[sev] !== false),
+                      },
+                    }))
+                  }
+                >
+                  {sev}
+                </button>
+              ))}
+            </div>
+            <div className="soc2-cat-row">
+              <div className="soc2-cat-label">Category</div>
+              <select
+                className="soc2-select"
+                value={filters.categories?.[0] || ""}
+                onChange={(e) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    categories: e.target.value ? [e.target.value] : [],
+                  }))
+                }
+              >
+                <option value="">All</option>
+                {findingCategories.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="soc2-findings-list soc2-findings-grid">
+            {visibleFindings.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                className={`soc2-finding soc2-finding-${f.severity}`.trim()}
+                onClick={() => {
+                  setSelectedHost(f.asset_hostname);
+                  setDrawerTab("findings");
+                }}
+              >
+                <div className="soc2-finding-top">
+                  <span className="soc2-finding-title">{f.title}</span>
+                  <span className="soc2-finding-sev">{f.severity}</span>
+                </div>
+                <div className="soc2-finding-meta">
+                  <span className="soc2-mono">{f.asset_hostname}</span>
+                  <span className="soc2-muted">
+                    {f.category}
+                    {f.status ? ` · ${f.status}` : ""}
+                  </span>
+                </div>
+              </button>
+            ))}
+            {!visibleFindings.length ? (
+              <div className="soc2-empty">No findings in current filters.</div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="soc2-panel">
+          <div className="soc2-panel-head">
+            <div className="soc2-panel-title">Asset inventory</div>
+            <div className="soc2-panel-meta">
+              {socLoading ? "Loading…" : `${sortedAssets.length} shown`}
+            </div>
+          </div>
+
+          <div className="soc2-filters">
+            <label className="soc2-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(filters.showUnresolved)}
+                onChange={(e) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    showUnresolved: e.target.checked,
+                  }))
+                }
+              />
+              Show unresolved
+            </label>
+            <label className="soc2-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(filters.showNonWeb)}
+                onChange={(e) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    showNonWeb: e.target.checked,
+                  }))
+                }
+              />
+              Show non-web
+            </label>
+            <label className="soc2-toggle">
+              <input
+                type="checkbox"
+                checked={Boolean(filters.changedOnly)}
+                onChange={(e) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    changedOnly: e.target.checked,
+                  }))
+                }
+              />
+              Changed only
+            </label>
+            <input
+              className="soc2-search"
+              placeholder="Search host, title, URL, provider…"
+              value={filters.search}
+              onChange={(e) =>
+                setFilters((prev) => ({ ...prev, search: e.target.value }))
               }
             />
           </div>
-          <div className="exec-status-meta">
-            {scanProgress?.message || "Running scan..."}
-            {scanProgress?.indeterminate ? "" : ` (${scanProgress?.percent ?? 0}%)`}
-          </div>
-        </div>
-      ) : null}
 
-      <div className="soc-triage">
-        {triageItems.map((item) => (
-          <button
-            key={item.key}
-            className={`soc-triage-item ${item.color}`}
-            onClick={() => openDetail(item.detailKey)}
-            type="button"
-          >
-            <span className="soc-triage-label">{item.label}</span>
-            <span className="soc-triage-value">{formatCount(item.value)}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="soc-grid">
-        <div className="soc-panel soc-cves">
-          <div className="soc-panel-header">
-            <h3>CVE Severity</h3>
-            <span className="soc-panel-meta">Min: {minCveSeverity}</span>
-            <button className="ghost" onClick={() => openDetail("vulnerabilities")}>
-              View details
-            </button>
-          </div>
-          <div className="soc-cve-grid">
-            <div className="soc-cve-card">
-              <div className="soc-cve-label">Critical</div>
-              <div className="soc-cve-value">{formatCount(cveCounts.Critical)}</div>
-            </div>
-            <div className="soc-cve-card">
-              <div className="soc-cve-label">High</div>
-              <div className="soc-cve-value">{formatCount(cveCounts.High)}</div>
-            </div>
-            <div className="soc-cve-card">
-              <div className="soc-cve-label">Medium</div>
-              <div className="soc-cve-value">{formatCount(cveCounts.Medium)}</div>
-            </div>
-            <div className="soc-cve-card">
-              <div className="soc-cve-label">Low</div>
-              <div className="soc-cve-value">{formatCount(cveCounts.Low)}</div>
-            </div>
-            <div className="soc-cve-card soc-cve-total">
-              <div className="soc-cve-label">Total</div>
-              <div className="soc-cve-value">{formatCount(cveCounts.Total)}</div>
-            </div>
-          </div>
-        </div>
-        <div className="soc-panel soc-queue">
-          <div className="soc-panel-header">
-            <h3>Findings Queue</h3>
-            <span className="soc-panel-meta">{queueItems.length} items</span>
-          </div>
-          <div className="soc-queue-controls">
-            <div className="soc-filters">
-              {[
-                ["all", "All"],
-                ["critical", "Critical"],
-                ["high", "High"],
-                ["changes", "Changes"],
-                ["infra", "Infra"],
-                ["web", "Web"],
-                ["email", "Email"],
-              ].map(([key, label]) => (
-                <button
-                  key={key}
-                  className={`soc-filter ${queueFilter === key ? "active" : ""}`}
-                  onClick={() => setQueueFilter(key)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <input
-              className="soc-search"
-              placeholder="Search host…"
-              value={queueSearch}
-              onChange={(e) => setQueueSearch(e.target.value)}
-            />
-          </div>
-          <div className="soc-queue-list">
-            {queueItems.length ? (
-              queueItems.map((item) => (
-                <div key={item.id} className="soc-queue-row">
-                  <span className={`soc-badge soc-${item.severity}`}>
-                    {item.severity}
-                  </span>
-                  <div className="soc-queue-main">
-                    <div className="soc-queue-title">{item.title}</div>
-                    <div className="soc-queue-meta">
-                      {item.count} affected · last scan #{item.lastSeen}
-                    </div>
-                  </div>
-                  <button
-                    className="ghost"
-                    onClick={() => {
-                      if (item.category === "changes") openDetail("changes");
-                      else if (item.category === "email") openDetail("email_issues");
-                      else if (item.category === "infra") openDetail("origin_exposure");
-                      else if (item.category === "vulns") openDetail("vulnerabilities");
-                      else openDetail("web");
-                    }}
+          <div className="soc2-table-wrap soc2-table-wrap-tight">
+            <table className="soc2-table soc2-table-tight">
+              <colgroup>
+                <col style={{ width: "20ch" }} />
+                <col style={{ width: "18ch" }} />
+                <col style={{ width: "8ch" }} />
+                <col style={{ width: "5ch" }} />
+                <col style={{ width: "5ch" }} />
+                <col style={{ width: "6ch" }} />
+                <col style={{ width: "22ch" }} />
+                <col style={{ width: "14ch" }} />
+                <col style={{ width: "14ch" }} />
+                <col style={{ width: "4ch" }} />
+                <col style={{ width: "3ch" }} />
+                <col style={{ width: "3ch" }} />
+                <col style={{ width: "4ch" }} />
+                <col style={{ width: "10ch" }} />
+                <col style={{ width: "9ch" }} />
+                <col style={{ width: "16ch" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th
+                    onClick={() =>
+                      setSort({
+                        key: "hostname",
+                        dir: sort.dir === "asc" ? "desc" : "asc",
+                      })
+                    }
                   >
-                    View
-                  </button>
-                </div>
-              ))
-            ) : (
-              <div className="exec-empty">No findings match your filters.</div>
-            )}
-          </div>
-        </div>
-
-        <div className="soc-panel soc-scope">
-          <div className="soc-panel-header">
-            <h3>Scope Explorer</h3>
-            <div className="soc-tabs">
-              {["domains", "ips", "web", "vulns"].map((tab) => (
-                <button
-                  key={tab}
-                  className={`soc-tab ${scopeTab === tab ? "active" : ""}`}
-                  onClick={() => setScopeTab(tab)}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="soc-table">
-            {scopeTab === "domains" ? (
-              <div className="soc-table-body">
-                {domainRows.slice(0, 120).map((row) => (
-                  <button
-                    key={row.key}
-                    className="soc-table-row"
-                    onClick={() => openDetail("domains")}
+                    Hostname
+                  </th>
+                  <th
+                    onClick={() =>
+                      setSort({
+                        key: "root_domain",
+                        dir: sort.dir === "asc" ? "desc" : "asc",
+                      })
+                    }
                   >
-                    <span>{row.domain}</span>
-                    <span className="soc-table-meta">
-                      {row.type} · {row.status} · {row.provider} · {row.responder}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {scopeTab === "ips" ? (
-              <div className="soc-table-body">
-                {ipRows.slice(0, 120).map((row) => (
-                  <button
-                    key={row.ip}
-                    className="soc-table-row"
-                    onClick={() => openDetail("dns")}
+                    Root
+                  </th>
+                  <th>Type</th>
+                  <th>DNS</th>
+                  <th>Web</th>
+                  <th
+                    onClick={() =>
+                      setSort({
+                        key: "status_code",
+                        dir: sort.dir === "asc" ? "desc" : "asc",
+                      })
+                    }
                   >
-                    <span>{row.ip}</span>
-                    <span className="soc-table-meta">
-                      {row.asn} · {row.country} · {row.domainCount} domains
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {scopeTab === "web" ? (
-              <div className="soc-table-body">
-                {webRows.slice(0, 120).map((row) => (
-                  <button
-                    key={row.host}
-                    className="soc-table-row"
-                    onClick={() => openDetail("web")}
+                    Code
+                  </th>
+                  <th>Title</th>
+                  <th>Platform</th>
+                  <th>Edge</th>
+                  <th
+                    onClick={() =>
+                      setSort({
+                        key: "ip_count",
+                        dir: sort.dir === "asc" ? "desc" : "asc",
+                      })
+                    }
                   >
-                    <span>{row.host}</span>
-                    <span className="soc-table-meta">
-                      {row.status} · {row.responseTime} · {row.server} · TLS {row.tlsDays} · {row.redirect}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {scopeTab === "vulns" ? (
-              <div className="soc-table-body">
-                {vulnRows.slice(0, 120).map((row) => (
-                  <button
-                    key={`${row.host}-${row.component}`}
-                    className="soc-table-row"
-                    onClick={() => openDetail("vulnerabilities")}
+                    IPs
+                  </th>
+                  <th>v6</th>
+                  <th>TLS</th>
+                  <th>HSTS</th>
+                  <th>Findings</th>
+                  <th
+                    onClick={() =>
+                      setSort({
+                        key: "changed",
+                        dir: sort.dir === "asc" ? "desc" : "asc",
+                      })
+                    }
                   >
-                    <span>{row.host}</span>
-                    <span className="soc-table-meta">
-                      {row.component} {row.version} · CVSS {row.cvss} · {row.count} CVEs
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="soc-panel soc-changes">
-          <div className="soc-panel-header">
-            <h3>Change & Timeline</h3>
-          </div>
-          <div className="soc-change-stream">
-            {changeSummary?.has_previous ? (
-              <>
-                <div className="soc-change-row" onClick={() => openDetail("changes")}>
-                  <span>New domains</span>
-                  <span className="soc-change-meta">{newDomains.length}</span>
-                </div>
-                <div className="soc-change-row" onClick={() => openDetail("changes")}>
-                  <span>Removed domains</span>
-                  <span className="soc-change-meta">{removedDomains.length}</span>
-                </div>
-                <div className="soc-change-row" onClick={() => openDetail("changes")}>
-                  <span>Provider changes</span>
-                  <span className="soc-change-meta">{providerChanges.length}</span>
-                </div>
-                <div className="soc-change-row" onClick={() => openDetail("changes")}>
-                  <span>Tech changes</span>
-                  <span className="soc-change-meta">{techChanges.length}</span>
-                </div>
-              </>
-            ) : (
-              <div className="exec-empty">No prior scan data.</div>
-            )}
-          </div>
-          <div className="soc-timeline">
-            <div className="soc-timeline-title">Scan Timeline</div>
-            {timeline.map((scan) => (
-              <button
-                key={scan.id}
-                className={`soc-timeline-row ${
-                  scan.id === selectedScanId ? "active" : ""
-                }`}
-                onClick={() => onSelectScan?.(scan.id)}
-              >
-                <span>#{scan.company_scan_number} (id {scan.id})</span>
-                <span className="soc-timeline-meta">
-                  {scan.scan_mode || "standard"} · {scan.status}
-                </span>
-              </button>
-            ))}
+                    Change
+                  </th>
+                  <th>Seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedAssets.map((a) => {
+                  const counts = a?.finding_counts || {};
+                  const sev = findFirstBySeverity(counts);
+                  const rowCls = [
+                    "soc2-row",
+                    selectedHost === a.hostname ? "active" : "",
+                    sev ? `sev-${sev}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  const changeState = a?.change?.state || "";
+                  return (
+                    <tr
+                      key={a.hostname}
+                      className={rowCls}
+                      onClick={() => setSelectedHost(a.hostname)}
+                      title={a?.final_url || ""}
+                    >
+                      <td className="soc2-mono soc2-ellipsis">{a.hostname}</td>
+                      <td className="soc2-mono soc2-ellipsis">{a.root_domain || "-"}</td>
+                      <td>{a.asset_type || "-"}</td>
+                      <td>{a.resolves ? "Y" : "N"}</td>
+                      <td>{a.web_reachable ? "Y" : "N"}</td>
+                      <td>{a.status_code || "-"}</td>
+                      <td className="soc2-ellipsis">{a.title || "-"}</td>
+                      <td className="soc2-ellipsis">{a.provider_hint || "-"}</td>
+                      <td className="soc2-ellipsis">{a.edge_family || "-"}</td>
+                      <td>{a.ip_count || 0}</td>
+                      <td>{a.ipv6_present ? "Y" : "N"}</td>
+                      <td>{a.tls_present ? "Y" : "N"}</td>
+                      <td>{a.hsts_present ? "Y" : "N"}</td>
+                      <td>
+                        <div className="soc2-findings-cell">
+                          <SeverityBadge
+                            severity="critical"
+                            value={counts.critical}
+                          />
+                          <SeverityBadge
+                            severity="investigate"
+                            value={counts.investigate}
+                          />
+                          <SeverityBadge severity="watch" value={counts.watch} />
+                          <SeverityBadge severity="info" value={counts.info} />
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`soc2-change ${changeState}`.trim()}>
+                          {changeState || "-"}
+                        </span>
+                      </td>
+                      <td className="soc2-muted soc2-ellipsis">{formatIso(a.last_seen)}</td>
+                    </tr>
+                  );
+                })}
+                {!sortedAssets.length ? (
+                  <tr>
+                    <td colSpan={16} className="soc2-empty">
+                      No assets to show (adjust filters).
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
 
-      <div className="soc-bottom">
-        <div className="soc-bottom-actions">
-          <button className="ghost" onClick={onOpenDetails}>
-            View Artifacts JSON
-          </button>
-          <button className="ghost" onClick={onExportArtifacts} disabled={!artifacts}>
-            Export Report
-          </button>
-          <button className="ghost" onClick={copySummary}>
-            Copy Summary
-          </button>
-          <button className="ghost" onClick={() => onChangeViewMode?.("executive")}>
-            Open in Executive view
-          </button>
-        </div>
-        {!artifacts ? (
-          <div className="soc-pill">
-            Not collected in standard scan.{" "}
-            <button className="ghost" onClick={() => onToggleDeepScan?.(true)}>
-              Enable deep scan
+      <div className={`soc2-drawer ${selectedHost ? "open" : ""}`.trim()}>
+        <div className="soc2-drawer-head">
+          <div>
+            <div className="soc2-drawer-title">
+              {selectedHost || "No asset selected"}
+            </div>
+            <div className="soc2-drawer-subtitle">
+              {assetDetail?.asset?.web?.final_url
+                ? assetDetail.asset.web.final_url
+                : ""}
+            </div>
+          </div>
+          <div className="soc2-drawer-actions">
+            <button className="btn" onClick={() => setSelectedHost("")}>
+              Close
             </button>
           </div>
+        </div>
+
+        {assetDetailError ? (
+          <div className="soc2-error">{assetDetailError}</div>
         ) : null}
-      </div>
 
-      <DrilldownModal open={detailOpen} content={detailContent} onClose={closeDetail} />
-    </section>
+        <div className="soc2-drawer-tabs">
+          {[
+            ["overview", "Overview"],
+            ["dns", "DNS"],
+            ["web", "Web"],
+            ["tls", "TLS"],
+            ["findings", "Findings"],
+            ["history", "History"],
+            ["raw", "Raw JSON"],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className={`soc2-tab ${drawerTab === key ? "active" : ""}`.trim()}
+              onClick={() => setDrawerTab(key)}
+              disabled={!selectedHost}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="soc2-drawer-body">
+          {assetDetailLoading ? <div className="soc2-muted">Loading…</div> : null}
+          {!assetDetailLoading && selectedHost && !assetDetail ? (
+            <div className="soc2-muted">Select an asset to load details.</div>
+          ) : null}
+
+          {assetDetail?.asset ? (
+            <>
+              {drawerTab === "overview" ? (
+                <>
+                  <DrawerSection title="Investigation summary">
+                    <div className="soc2-kv-grid">
+                      <KeyValue label="Type" value={assetDetail.asset.asset_type} />
+                      <KeyValue
+                        label="Root domain"
+                        value={assetDetail.asset.root_domain}
+                      />
+                      <KeyValue
+                        label="Resolves"
+                        value={assetDetail.asset.resolves ? "yes" : "no"}
+                      />
+                      <KeyValue
+                        label="Web reachable"
+                        value={assetDetail.asset.web?.reachable ? "yes" : "no"}
+                      />
+                      <KeyValue label="Status" value={assetDetail.asset.web?.status_code} />
+                      <KeyValue label="Title" value={assetDetail.asset.web?.title} />
+                      <KeyValue label="Edge/CDN" value={assetDetail.asset.edge_family} />
+                      <KeyValue
+                        label="IPv4"
+                        value={assetDetail.asset.has_ipv4 ? "yes" : "no"}
+                      />
+                      <KeyValue
+                        label="IPv6"
+                        value={assetDetail.asset.has_ipv6 ? "yes" : "no"}
+                      />
+                    </div>
+                  </DrawerSection>
+                  <DrawerSection title="Quick findings">
+                    {(assetDetail.asset.findings || []).slice(0, 8).map((f) => (
+                      <div
+                        key={f.id}
+                        className={`soc2-mini-f soc2-mini-${f.severity}`}
+                      >
+                        <div className="soc2-mini-title">{f.title}</div>
+                        <div className="soc2-mini-meta">
+                          <span>{f.severity}</span>
+                          <span className="soc2-muted">{f.category}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {!assetDetail.asset.findings?.length ? (
+                      <div className="soc2-muted">No findings for this asset.</div>
+                    ) : null}
+                  </DrawerSection>
+                </>
+              ) : null}
+
+              {drawerTab === "dns" ? (
+                <DrawerSection title="DNS evidence">
+                  <div className="soc2-kv-grid">
+                    <KeyValue label="IP count" value={assetDetail.asset.ip_count} />
+                    <KeyValue
+                      label="A/AAAA"
+                      value={(assetDetail.asset.dns?.ips || []).join(", ")}
+                    />
+                    <KeyValue
+                      label="CNAME"
+                      value={(assetDetail.asset.dns?.CNAME || []).join(", ")}
+                    />
+                    <KeyValue
+                      label="MX"
+                      value={(assetDetail.asset.dns?.MX || []).join(", ")}
+                    />
+                    <KeyValue
+                      label="NS"
+                      value={(assetDetail.asset.dns?.NS || []).join(", ")}
+                    />
+                    <KeyValue
+                      label="CAA"
+                      value={(assetDetail.asset.dns?.CAA || []).join(", ")}
+                    />
+                  </div>
+                  <details className="soc2-details">
+                    <summary>Raw DNS JSON</summary>
+                    <pre className="soc2-pre">
+                      {JSON.stringify(assetDetail.asset.dns || {}, null, 2)}
+                    </pre>
+                  </details>
+                </DrawerSection>
+              ) : null}
+
+              {drawerTab === "web" ? (
+                <DrawerSection title="Web metadata">
+                  <div className="soc2-kv-grid">
+                    <KeyValue label="Final URL" value={assetDetail.asset.web?.final_url} />
+                    <KeyValue
+                      label="Status code"
+                      value={assetDetail.asset.web?.status_code}
+                    />
+                    <KeyValue
+                      label="Response ms"
+                      value={assetDetail.asset.web?.response_time_ms}
+                    />
+                    <KeyValue label="Title" value={assetDetail.asset.web?.title} />
+                    <KeyValue label="Server" value={assetDetail.asset.web?.server_header} />
+                    <KeyValue
+                      label="Technologies"
+                      value={(assetDetail.asset.web?.technologies || []).join(", ")}
+                    />
+                    <KeyValue
+                      label="Fingerprints"
+                      value={(assetDetail.asset.web?.fingerprints || []).join(", ")}
+                    />
+                  </div>
+                  <details className="soc2-details">
+                    <summary>Security headers</summary>
+                    <pre className="soc2-pre">
+                      {JSON.stringify(
+                        assetDetail.asset.web?.security_headers || {},
+                        null,
+                        2
+                      )}
+                    </pre>
+                  </details>
+                  <details className="soc2-details">
+                    <summary>Deep scan aux</summary>
+                    <pre className="soc2-pre">
+                      {JSON.stringify(assetDetail.asset.web?.deep_scan || {}, null, 2)}
+                    </pre>
+                  </details>
+                </DrawerSection>
+              ) : null}
+
+              {drawerTab === "tls" ? (
+                <DrawerSection title="TLS details">
+                  <div className="soc2-kv-grid">
+                    <KeyValue
+                      label="Not before"
+                      value={assetDetail.asset.web?.tls?.not_before}
+                    />
+                    <KeyValue
+                      label="Not after"
+                      value={assetDetail.asset.web?.tls?.not_after}
+                    />
+                    <KeyValue
+                      label="Issuer"
+                      value={Array.isArray(assetDetail.asset.web?.tls?.issuer)
+                        ? assetDetail.asset.web.tls.issuer
+                            .map((x) => x.join("="))
+                            .join(", ")
+                        : ""}
+                    />
+                    <KeyValue
+                      label="SAN"
+                      value={Array.isArray(assetDetail.asset.web?.tls?.san)
+                        ? assetDetail.asset.web.tls.san.join(", ")
+                        : ""}
+                    />
+                    <KeyValue
+                      label="HSTS"
+                      value={assetDetail.asset.web?.hsts?.header || ""}
+                    />
+                  </div>
+                  <details className="soc2-details">
+                    <summary>Raw TLS JSON</summary>
+                    <pre className="soc2-pre">
+                      {JSON.stringify(assetDetail.asset.web?.tls || {}, null, 2)}
+                    </pre>
+                  </details>
+                </DrawerSection>
+              ) : null}
+
+              {drawerTab === "findings" ? (
+                <DrawerSection title="Findings">
+                  {(assetDetail.asset.findings || []).map((f) => (
+                    <div
+                      key={f.id}
+                      className={`soc2-finding-detail soc2-finding-${f.severity}`}
+                    >
+                      <div className="soc2-finding-top">
+                        <span className="soc2-finding-title">{f.title}</span>
+                        <span className="soc2-finding-sev">{f.severity}</span>
+                      </div>
+                      <div className="soc2-muted">{f.category}</div>
+                      {f.explanation ? (
+                        <div className="soc2-finding-expl">{f.explanation}</div>
+                      ) : null}
+                      {f.remediation ? (
+                        <div className="soc2-finding-rem">
+                          <div className="soc2-muted">Next step</div>
+                          <div>{f.remediation}</div>
+                        </div>
+                      ) : null}
+                      <details className="soc2-details">
+                        <summary>Evidence</summary>
+                        <pre className="soc2-pre">
+                          {JSON.stringify(f.evidence || {}, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  ))}
+                  {!assetDetail.asset.findings?.length ? (
+                    <div className="soc2-muted">No findings for this asset.</div>
+                  ) : null}
+                </DrawerSection>
+              ) : null}
+
+              {drawerTab === "history" ? (
+                <DrawerSection title="History / changes">
+                  <div className="soc2-kv-grid">
+                    <KeyValue label="Change state" value={assetDetail.asset.change?.state} />
+                    <KeyValue
+                      label="Change flags"
+                      value={(assetDetail.asset.change?.flags || []).join(", ")}
+                    />
+                  </div>
+                  <details className="soc2-details">
+                    <summary>Previous snapshot</summary>
+                    <pre className="soc2-pre">
+                      {JSON.stringify(assetDetail.asset.change?.previous || {}, null, 2)}
+                    </pre>
+                  </details>
+                </DrawerSection>
+              ) : null}
+
+              {drawerTab === "raw" ? (
+                <DrawerSection title="Raw JSON">
+                  <pre className="soc2-pre">
+                    {JSON.stringify(assetDetail.asset.raw || {}, null, 2)}
+                  </pre>
+                </DrawerSection>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }

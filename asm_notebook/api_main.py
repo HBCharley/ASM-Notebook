@@ -18,7 +18,7 @@ import json
 
 from sqlalchemy import delete, func, select
 
-from .services import company_service, scan_service, cve_service
+from .services import company_service, scan_service, cve_service, preference_service, soc_service
 from .db import SessionLocal
 from .models import (
     AuthAllowlist,
@@ -166,6 +166,10 @@ class UserGroupIdUpdate(BaseModel):
 
 class TaskRunScan(BaseModel):
     scan_id: int
+
+
+class PreferenceUpsert(BaseModel):
+    value: dict[str, Any] = {}
 
 
 @app.on_event("startup")
@@ -388,6 +392,67 @@ def me(current_user: CurrentUser | None = Depends(get_current_user)) -> dict[str
             "owned_company_count": owned_count,
             "scan_limits": _scan_limits(role),
         }
+
+
+@router.get("/me/preferences/{key}")
+def get_preference(
+    key: str, current_user: CurrentUser | None = Depends(get_current_user)
+) -> dict[str, Any]:
+    user = _require_authenticated(current_user)
+    with SessionLocal() as s:
+        value = preference_service.get_preference(s, user_id=user.id, key=key)
+        return {"key": key, "value": value}
+
+
+@router.put("/me/preferences/{key}")
+def put_preference(
+    key: str,
+    payload: PreferenceUpsert,
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> dict[str, Any]:
+    user = _require_authenticated(current_user)
+    with SessionLocal() as s:
+        value = preference_service.set_preference(
+            s, user_id=user.id, key=key, value=payload.value
+        )
+        return {"key": key, "value": value}
+
+
+@router.get("/companies/{slug}/soc")
+def get_soc_overview(
+    request: Request,
+    slug: str,
+    scan_id: int | None = None,
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> Response:
+    with SessionLocal() as s:
+        company = _enforce_company_access(s, current_user, slug, write=False)
+        payload = soc_service.get_soc_overview(s, company=company, scan_id=scan_id)
+        etag = _build_etag(payload)
+        not_modified = _maybe_not_modified(request, etag)
+        if not_modified is not None:
+            return not_modified
+        return JSONResponse(status_code=200, content=payload, headers={"ETag": etag})
+
+
+@router.get("/companies/{slug}/soc/assets/{hostname}")
+def get_soc_asset_detail(
+    request: Request,
+    slug: str,
+    hostname: str,
+    scan_id: int | None = None,
+    current_user: CurrentUser | None = Depends(get_current_user),
+) -> Response:
+    with SessionLocal() as s:
+        company = _enforce_company_access(s, current_user, slug, write=False)
+        payload = soc_service.get_soc_asset_detail(
+            s, company=company, scan_id=scan_id, hostname=hostname
+        )
+        etag = _build_etag(payload)
+        not_modified = _maybe_not_modified(request, etag)
+        if not_modified is not None:
+            return not_modified
+        return JSONResponse(status_code=200, content=payload, headers={"ETag": etag})
 
 
 @router.get("/admin/auth-allowlist")

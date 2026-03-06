@@ -31,6 +31,7 @@ from ..plugins.http_meta import fetch_http_metadata
 from ..plugins.ip_intel import lookup_asn_for_ips
 from .company_service import normalize_domain
 from .cve_service import find_cves
+from . import finding_service
 
 _CANCELLED_SCANS: set[int] = set()
 logger = logging.getLogger("uvicorn.error")
@@ -1570,6 +1571,13 @@ def _execute_scan(
             upsert_artifact("timings", timings)
 
             set_progress(6, 6, "Finalizing scan")
+            finding_service.persist_findings_for_scan(
+                s,
+                company_id=scan.company_id,
+                scan_id=scan_id,
+                intel_rows=intel_rows,
+                prev_intel_rows=prev_intel_rows,
+            )
             scan.status = "success"
             scan.completed_at = _now_utc()
             scan.notes = "6/6 Scan complete"

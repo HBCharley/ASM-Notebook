@@ -17,6 +17,7 @@ def _reload_api_main(monkeypatch: pytest.MonkeyPatch):
     importlib.reload(init_db)
     api_main = importlib.reload(api_main)
     monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(api_main.group_service, "ensure_default_groups", lambda: None)
     return api_main
 
 

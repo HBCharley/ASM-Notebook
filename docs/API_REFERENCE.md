@@ -41,6 +41,10 @@ Cloud Tasks access:
 ### Session
 
 - `GET /me` → current role/access context (public if no/invalid token)
+- `GET /me/preferences/{key}` (auth required)
+  - Reads a per-user JSON preference value.
+- `PUT /me/preferences/{key}` (auth required)
+  - Writes a per-user JSON preference value as `{ "value": { ... } }`.
 
 ### Companies
 
@@ -69,6 +73,19 @@ Cloud Tasks access:
 
 - `GET /companies/{slug}/scans/{scan_id}/artifacts` (public/auth + company access)
   - Returns the full scan artifact bundle. Supports ETag/`If-None-Match` revalidation (304).
+
+### SOC Analyst (shaped)
+
+These endpoints shape scan artifacts into an investigation-focused model for the SOC Analyst workspace.
+
+- `GET /companies/{slug}/soc` (public/auth + company access)
+  - Returns summary tiles, shaped asset inventory rows, and persisted findings for the selected scan.
+  - Optional `?scan_id=...` (defaults to latest scan).
+  - Supports ETag/`If-None-Match` revalidation (304).
+- `GET /companies/{slug}/soc/assets/{hostname}` (public/auth + company access)
+  - Returns the selected asset’s detail payload (overview/DNS/Web/TLS/findings/history/raw).
+  - Optional `?scan_id=...` (defaults to latest scan).
+  - Supports ETag/`If-None-Match` revalidation (304).
 
 ### Tasks
 
@@ -104,4 +121,3 @@ All admin endpoints require an authenticated admin.
 - `401 unauthorized`: missing/invalid/expired token (for endpoints that require authentication)
 - `403 forbidden`: authenticated but lacks required role or company access
 - `429 rate_limited`: scan limits hit (cooldown/quota) or scan already running
-

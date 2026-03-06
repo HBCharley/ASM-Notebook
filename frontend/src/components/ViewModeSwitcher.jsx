@@ -29,6 +29,7 @@ export default function ViewModeSwitcher({ value = "standard", onChange }) {
             onClick={() => onChange?.(mode.key)}
             aria-label={mode.label}
             aria-pressed={active}
+            title={mode.label}
           >
             <Icon size={14} />
           </button>

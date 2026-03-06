@@ -132,9 +132,36 @@ export const api = {
   getArtifacts: (slug, id) => request(`/companies/${slug}/scans/${id}/artifacts`),
   getArtifactsIfModified: (slug, id) =>
     requestIfModified(`/companies/${slug}/scans/${id}/artifacts`),
+  getSocOverview: (slug, scanId = null) =>
+    request(
+      `/companies/${slug}/soc${scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ""}`
+    ),
+  getSocOverviewIfModified: (slug, scanId = null) =>
+    requestIfModified(
+      `/companies/${slug}/soc${scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ""}`
+    ),
+  getSocAssetDetail: (slug, hostname, scanId = null) =>
+    request(
+      `/companies/${slug}/soc/assets/${encodeURIComponent(hostname)}${
+        scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ""
+      }`
+    ),
+  getSocAssetDetailIfModified: (slug, hostname, scanId = null) =>
+    requestIfModified(
+      `/companies/${slug}/soc/assets/${encodeURIComponent(hostname)}${
+        scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ""
+      }`
+    ),
   deleteScan: (slug, id) =>
     request(`/companies/${slug}/scans/${id}`, { method: "DELETE" }),
   getMe: () => request("/me"),
+  getPreference: (key) =>
+    request(`/me/preferences/${encodeURIComponent(key)}`),
+  setPreference: (key, value) =>
+    request(`/me/preferences/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    }),
   listGroups: () => request("/admin/groups"),
   createGroup: (payload) =>
     request("/admin/groups", { method: "POST", body: JSON.stringify(payload) }),

@@ -188,6 +188,14 @@ API validation (curl):
 - `curl -X POST http://127.0.0.1:8080/api/v1/companies -H "Content-Type: application/json" -d "{\"slug\":\"example\",\"name\":\"Example Company\",\"domains\":[\"example.com\"]}"`
 - `curl -X POST http://127.0.0.1:8080/api/v1/companies/example/scans`
 
+SOC Analyst workspace demo data (optional):
+
+1. Apply migrations in the running container:
+   - `docker exec -it asm-app alembic upgrade head`
+2. Seed a small two-scan dataset with findings + history examples:
+   - `docker exec -it asm-app python scripts/seed_soc_demo.py`
+3. Open the UI and select company slug `soc-demo` in SOC mode.
+
 ## Cloud Run (All-in-one Demo)
 
 Target: one Cloud Run service serving UI at `/` and API at `/api/v1`.

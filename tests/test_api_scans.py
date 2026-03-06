@@ -3,13 +3,14 @@ from __future__ import annotations
 import importlib
 from pathlib import Path
 import os
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 os.environ.setdefault(
     "ASM_DATABASE_URL", "postgresql+psycopg://user:pass@localhost:5432/testdb"
 )
-from asm_notebook.security import Principal
+from asm_notebook.security import CurrentUser
 
 
 @pytest.fixture()
@@ -30,13 +31,14 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
     importlib.reload(init_db)
     api_main = importlib.reload(api_main)
     monkeypatch.setattr(api_main, "init_db", lambda: None)
+    monkeypatch.setattr(api_main.group_service, "ensure_default_groups", lambda: None)
+    monkeypatch.setattr(api_main.group_service, "resolve_group_id", lambda name: uuid.uuid4())
     import asm_notebook.security as security
-    api_main.app.dependency_overrides[security.get_principal] = (
-        lambda: Principal(
-            role="admin",
+    api_main.app.dependency_overrides[security.get_current_user] = (
+        lambda: CurrentUser(
+            id=uuid.uuid4(),
             email="admin@example.com",
-            sub="1",
-            authenticated=True,
+            is_admin=True,
             group_id=None,
         )
     )
@@ -91,6 +93,8 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
         owner_email=None,
         visibility="private",
         group_names=None,
+        group_ids=None,
+        created_by_user_id=None,
     ):
         created[slug] = {
             "id": len(created) + 1,
@@ -99,10 +103,12 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> TestClient:
             "domains": domains,
             "owner_email": owner_email,
             "visibility": visibility,
+            "group_ids": group_ids,
+            "created_by_user_id": created_by_user_id,
         }
         return created[slug]
 
-    def _trigger_scan(slug, background_tasks, deep_scan=False, principal=None):
+    def _trigger_scan(slug, background_tasks, deep_scan=False, current_user=None, principal=None):
         num = next_scan_number["value"]
         next_scan_number["value"] += 1
         scan = {
