@@ -18,6 +18,27 @@ export function getAuthToken() {
   return AUTH_TOKEN;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isIdempotentMethod(method) {
+  const m = String(method || "GET").toUpperCase();
+  return m === "GET" || m === "HEAD" || m === "OPTIONS";
+}
+
+function isRetryableStatus(status) {
+  return status === 408 || status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+function computeRetryDelayMs(attempt) {
+  const base = 300;
+  const max = 4000;
+  const jitter = Math.floor(Math.random() * 120);
+  const exp = Math.min(max, base * Math.pow(2, Math.max(0, attempt - 1)));
+  return exp + jitter;
+}
+
 function maybeClearStoredAuthToken(status) {
   if (status !== 401) return;
   AUTH_TOKEN = "";
@@ -33,20 +54,38 @@ function maybeClearStoredAuthToken(status) {
 
 async function request(path, options = {}) {
   const { __retried, ...fetchOptions } = options || {};
+  const attempt = Number.isFinite(fetchOptions.__attempt) ? fetchOptions.__attempt : 1;
+  const maxAttempts = Number.isFinite(fetchOptions.__maxAttempts)
+    ? fetchOptions.__maxAttempts
+    : 3;
+  delete fetchOptions.__attempt;
+  delete fetchOptions.__maxAttempts;
+
+  const method = String(fetchOptions.method || "GET").toUpperCase();
+  const allowRetry = isIdempotentMethod(method);
   const hadBearer = !!AUTH_TOKEN;
   const authHeader = AUTH_TOKEN
     ? `Bearer ${AUTH_TOKEN}`
     : BASIC_AUTH_HEADER
       ? BASIC_AUTH_HEADER
       : "";
-  const res = await fetch(`${BASE}${API_PREFIX}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(authHeader ? { Authorization: authHeader } : {}),
-      ...(fetchOptions.headers || {}),
-    },
-    ...fetchOptions,
-  });
+  let res;
+  try {
+    res = await fetch(`${BASE}${API_PREFIX}${path}`, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(authHeader ? { Authorization: authHeader } : {}),
+        ...(fetchOptions.headers || {}),
+      },
+      ...fetchOptions,
+    });
+  } catch (err) {
+    if (allowRetry && attempt < maxAttempts) {
+      await sleep(computeRetryDelayMs(attempt));
+      return request(path, { ...fetchOptions, __attempt: attempt + 1, __maxAttempts: maxAttempts });
+    }
+    throw err;
+  }
   if (res.status === 204) {
     return null;
   }
@@ -64,6 +103,10 @@ async function request(path, options = {}) {
       maybeClearStoredAuthToken(res.status);
       return request(path, { ...fetchOptions, __retried: true });
     }
+    if (allowRetry && isRetryableStatus(res.status) && attempt < maxAttempts) {
+      await sleep(computeRetryDelayMs(attempt));
+      return request(path, { ...fetchOptions, __attempt: attempt + 1, __maxAttempts: maxAttempts });
+    }
     maybeClearStoredAuthToken(res.status);
     const detail =
       (data && (data.message || data.detail)) ||
@@ -80,6 +123,15 @@ async function request(path, options = {}) {
 
 async function requestIfModified(path, options = {}) {
   const { __retried, ...fetchOptions } = options || {};
+  const attempt = Number.isFinite(fetchOptions.__attempt) ? fetchOptions.__attempt : 1;
+  const maxAttempts = Number.isFinite(fetchOptions.__maxAttempts)
+    ? fetchOptions.__maxAttempts
+    : 3;
+  delete fetchOptions.__attempt;
+  delete fetchOptions.__maxAttempts;
+
+  const method = String(fetchOptions.method || "GET").toUpperCase();
+  const allowRetry = isIdempotentMethod(method);
   const hadBearer = !!AUTH_TOKEN;
   const authHeader = AUTH_TOKEN
     ? `Bearer ${AUTH_TOKEN}`
@@ -88,15 +140,28 @@ async function requestIfModified(path, options = {}) {
       : "";
   const url = `${BASE}${API_PREFIX}${path}`;
   const cachedEtag = ETAG_CACHE.get(url) || "";
-  const res = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(authHeader ? { Authorization: authHeader } : {}),
-      ...(cachedEtag ? { "If-None-Match": cachedEtag } : {}),
-      ...(fetchOptions.headers || {}),
-    },
-    ...fetchOptions,
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(authHeader ? { Authorization: authHeader } : {}),
+        ...(cachedEtag ? { "If-None-Match": cachedEtag } : {}),
+        ...(fetchOptions.headers || {}),
+      },
+      ...fetchOptions,
+    });
+  } catch (err) {
+    if (allowRetry && attempt < maxAttempts) {
+      await sleep(computeRetryDelayMs(attempt));
+      return requestIfModified(path, {
+        ...fetchOptions,
+        __attempt: attempt + 1,
+        __maxAttempts: maxAttempts,
+      });
+    }
+    throw err;
+  }
   if (res.status === 304) {
     return { notModified: true, data: null };
   }
@@ -120,6 +185,14 @@ async function requestIfModified(path, options = {}) {
     if (res.status === 401 && hadBearer && !__retried) {
       maybeClearStoredAuthToken(res.status);
       return requestIfModified(path, { ...fetchOptions, __retried: true });
+    }
+    if (allowRetry && isRetryableStatus(res.status) && attempt < maxAttempts) {
+      await sleep(computeRetryDelayMs(attempt));
+      return requestIfModified(path, {
+        ...fetchOptions,
+        __attempt: attempt + 1,
+        __maxAttempts: maxAttempts,
+      });
     }
     maybeClearStoredAuthToken(res.status);
     const detail =
