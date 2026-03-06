@@ -218,6 +218,26 @@ Required env vars:
 - `USER_EMAILS` (comma-separated)
 - `PUBLIC_COMPANY_SLUGS` (legacy; public access is now group-based via `Unauthenticated`)
 - `ADMIN_SCAN_COOLDOWN_SECONDS` / `ADMIN_SCANS_PER_HOUR`
+
+### Deploy Script + Rules
+
+This repo includes a production-minded deploy script:
+
+- `scripts/deploy_production.ps1`
+
+Deploy rules:
+
+- `deploy/production.rules.example.json` (committed template)
+- `deploy/production.rules.json` (local overrides; gitignored)
+
+Cloud Run sizing can be configured via the `cloud_run` section (optional):
+
+- `memory`, `cpu`, `concurrency`, `min_instances`, `max_instances`
+
+Cost note:
+
+- If `min_instances=1`, Cloud Run keeps one instance warm even when idle (higher baseline cost, fewer cold starts).
+- If you want near-zero idle cost, set `min_instances=0` (accept cold starts).
 - `USER_SCAN_COOLDOWN_SECONDS` / `USER_SCANS_PER_HOUR`
 - `ENABLE_TASKS=1` (preferred) or `ASM_TASKS_ENABLED=1` (enable Cloud Tasks for scans)
 - `ASM_TASKS_PROJECT` (GCP project id)

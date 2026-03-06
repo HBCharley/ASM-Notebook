@@ -70,3 +70,16 @@ gcloud tasks queues update scan-runner --location <REGION> `
   --max-concurrent-dispatches=5 `
   --max-dispatches-per-second=1
 ```
+
+## Cloud Run Sizing + Cost Notes
+
+Production has exhibited intermittent `503` responses when the Cloud Run container is OOM-killed (memory limit exceeded). The deploy script supports setting Cloud Run sizing via `deploy/production.rules.json` (local, gitignored) and `deploy/production.rules.example.json` (committed).
+
+Key knobs:
+
+- `cloud_run.memory` / `cloud_run.cpu`: instance size.
+- `cloud_run.concurrency`: max requests per instance.
+- `cloud_run.min_instances`: when set to `1`, Cloud Run will keep one instance warm even when idle (higher baseline cost, fewer cold starts).
+- `cloud_run.max_instances`: caps autoscaling (controls burst cost).
+
+For cost-sensitive deployments, set `cloud_run.min_instances` to `0` to allow scale-to-zero, accepting cold starts.
