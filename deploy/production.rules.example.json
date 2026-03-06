@@ -15,7 +15,12 @@
     "dispatch_deadline_seconds": 1800
   },
   "cloud_run": {
-    "timeout_seconds": 3600
+    "timeout_seconds": 3600,
+    "memory": "2Gi",
+    "cpu": 2,
+    "concurrency": 20,
+    "min_instances": 1,
+    "max_instances": 2
   },
   "scan": {
     "max_seconds": 3600

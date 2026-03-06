@@ -57,6 +57,31 @@ if ($rules.cloud_run -and $rules.cloud_run.timeout_seconds) {
   $cloudRunTimeout = [int]$rules.cloud_run.timeout_seconds
 }
 
+$cloudRunMemory = $null
+if ($rules.cloud_run -and $rules.cloud_run.memory) {
+  $cloudRunMemory = [string]$rules.cloud_run.memory
+}
+
+$cloudRunCpu = $null
+if ($rules.cloud_run -and $rules.cloud_run.cpu) {
+  $cloudRunCpu = [string]$rules.cloud_run.cpu
+}
+
+$cloudRunConcurrency = $null
+if ($rules.cloud_run -and $rules.cloud_run.concurrency) {
+  $cloudRunConcurrency = [int]$rules.cloud_run.concurrency
+}
+
+$cloudRunMinInstances = $null
+if ($rules.cloud_run -and $rules.cloud_run.min_instances -ne $null) {
+  $cloudRunMinInstances = [int]$rules.cloud_run.min_instances
+}
+
+$cloudRunMaxInstances = $null
+if ($rules.cloud_run -and $rules.cloud_run.max_instances -ne $null) {
+  $cloudRunMaxInstances = [int]$rules.cloud_run.max_instances
+}
+
 $scanMaxSeconds = 3600
 if ($rules.scan -and $rules.scan.max_seconds) {
   $scanMaxSeconds = [int]$rules.scan.max_seconds
@@ -122,8 +147,16 @@ if ($tasksEnabled) {
 }
 $secretString = ($secretArgs -join ",")
 
+$deployFlags = @()
+if ($cloudRunMemory) { $deployFlags += "--memory $cloudRunMemory" }
+if ($cloudRunCpu) { $deployFlags += "--cpu $cloudRunCpu" }
+if ($cloudRunConcurrency) { $deployFlags += "--concurrency $cloudRunConcurrency" }
+if ($cloudRunMinInstances -ne $null) { $deployFlags += "--min-instances $cloudRunMinInstances" }
+if ($cloudRunMaxInstances -ne $null) { $deployFlags += "--max-instances $cloudRunMaxInstances" }
+$deployFlagString = ($deployFlags -join " ")
+
 Invoke-Step "Deploy Cloud Run (explicit env + secrets)" @"
-gcloud run deploy $service --image $image --region $region --platform managed --quiet --timeout $cloudRunTimeout --set-env-vars "$envVarString" --set-secrets "$secretString"
+gcloud run deploy $service --image $image --region $region --platform managed --quiet --timeout $cloudRunTimeout $deployFlagString --set-env-vars "$envVarString" --set-secrets "$secretString"
 "@
 
 if (-not $SkipVerify) {
