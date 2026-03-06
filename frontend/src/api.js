@@ -8,6 +8,7 @@ const BASIC_AUTH_HEADER =
     : "";
 let AUTH_TOKEN = "";
 const ETAG_CACHE = new Map();
+const AUTH_TOKEN_STORAGE_KEY = "asm_auth_id_token";
 
 export function setAuthToken(token) {
   AUTH_TOKEN = token || "";
@@ -17,7 +18,22 @@ export function getAuthToken() {
   return AUTH_TOKEN;
 }
 
+function maybeClearStoredAuthToken(status) {
+  if (status !== 401) return;
+  AUTH_TOKEN = "";
+  ETAG_CACHE.clear();
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 async function request(path, options = {}) {
+  const { __retried, ...fetchOptions } = options || {};
+  const hadBearer = !!AUTH_TOKEN;
   const authHeader = AUTH_TOKEN
     ? `Bearer ${AUTH_TOKEN}`
     : BASIC_AUTH_HEADER
@@ -27,9 +43,9 @@ async function request(path, options = {}) {
     headers: {
       "Content-Type": "application/json",
       ...(authHeader ? { Authorization: authHeader } : {}),
-      ...(options.headers || {}),
+      ...(fetchOptions.headers || {}),
     },
-    ...options,
+    ...fetchOptions,
   });
   if (res.status === 204) {
     return null;
@@ -44,6 +60,11 @@ async function request(path, options = {}) {
     }
   }
   if (!res.ok) {
+    if (res.status === 401 && hadBearer && !__retried) {
+      maybeClearStoredAuthToken(res.status);
+      return request(path, { ...fetchOptions, __retried: true });
+    }
+    maybeClearStoredAuthToken(res.status);
     const detail =
       (data && (data.message || data.detail)) ||
       (text && !data ? text : null) ||
@@ -58,6 +79,8 @@ async function request(path, options = {}) {
 }
 
 async function requestIfModified(path, options = {}) {
+  const { __retried, ...fetchOptions } = options || {};
+  const hadBearer = !!AUTH_TOKEN;
   const authHeader = AUTH_TOKEN
     ? `Bearer ${AUTH_TOKEN}`
     : BASIC_AUTH_HEADER
@@ -70,9 +93,9 @@ async function requestIfModified(path, options = {}) {
       "Content-Type": "application/json",
       ...(authHeader ? { Authorization: authHeader } : {}),
       ...(cachedEtag ? { "If-None-Match": cachedEtag } : {}),
-      ...(options.headers || {}),
+      ...(fetchOptions.headers || {}),
     },
-    ...options,
+    ...fetchOptions,
   });
   if (res.status === 304) {
     return { notModified: true, data: null };
@@ -94,6 +117,11 @@ async function requestIfModified(path, options = {}) {
     }
   }
   if (!res.ok) {
+    if (res.status === 401 && hadBearer && !__retried) {
+      maybeClearStoredAuthToken(res.status);
+      return requestIfModified(path, { ...fetchOptions, __retried: true });
+    }
+    maybeClearStoredAuthToken(res.status);
     const detail =
       (data && (data.message || data.detail)) ||
       (text && !data ? text : null) ||

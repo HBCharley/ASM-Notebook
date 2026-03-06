@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../../api.js";
+import { api, getAuthToken } from "../../api.js";
 
 const PREF_KEY = "soc.filters.v1";
 const LOCAL_KEY = "asm.soc.filters.v1";
@@ -142,6 +142,7 @@ export default function SocDashboard(props) {
     if (local) {
       setFilters((prev) => ({ ...prev, ...local }));
     }
+    if (!getAuthToken()) return;
     try {
       const resp = await api.getPreference(PREF_KEY);
       if (resp?.value && typeof resp.value === "object") {
@@ -156,7 +157,9 @@ export default function SocDashboard(props) {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(LOCAL_KEY, JSON.stringify(next));
     }
-    api.setPreference(PREF_KEY, next).catch(() => {});
+    if (getAuthToken()) {
+      api.setPreference(PREF_KEY, next).catch(() => {});
+    }
   }
 
   async function loadSocOverview({ ifModified = false } = {}) {
