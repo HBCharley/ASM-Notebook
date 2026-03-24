@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { api, getAuthToken } from "../../api.js";
 
-const PREF_KEY = "soc.filters.v1";
-const LOCAL_KEY = "asm.soc.filters.v1";
+const PREF_KEY = "soc.filters.v2";
+const LOCAL_KEY = "asm.soc.filters.v2";
 
 function formatCount(value) {
   if (!Number.isFinite(value)) return "0";
@@ -108,7 +108,7 @@ export default function SocDashboard(props) {
 
   const [filters, setFilters] = useState(() => ({
     showUnresolved: false,
-    showNonWeb: false,
+    showNonWeb: true,
     changedOnly: false,
     search: "",
     tileFilter: "",
@@ -596,10 +596,18 @@ export default function SocDashboard(props) {
               />
               Show non-web
             </label>
-            <label className="soc2-toggle">
+            <label
+              className="soc2-toggle"
+              title={
+                !summary.assets_changed
+                  ? "No changes detected vs previous scan"
+                  : "Show only assets that changed vs previous scan"
+              }
+            >
               <input
                 type="checkbox"
                 checked={Boolean(filters.changedOnly)}
+                disabled={!summary.assets_changed}
                 onChange={(e) =>
                   setFilters((prev) => ({
                     ...prev,
