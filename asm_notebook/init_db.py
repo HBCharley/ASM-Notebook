@@ -1,6 +1,9 @@
-from .db import ENGINE, Base
-from . import models  # noqa: F401 — ensure all models are registered
+from sqlalchemy import text
+
+from .db import ENGINE
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=ENGINE)
+    # Migrations are the source of truth; this just verifies connectivity.
+    with ENGINE.connect() as conn:
+        conn.execute(text("SELECT 1"))

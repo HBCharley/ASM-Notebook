@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import dns.resolver
 
 
-def resolve_dns(domain: str) -> dict:
+def resolve_dns(domain: str, include_ptr: bool = True) -> dict:
     r = dns.resolver.Resolver()
     r.lifetime = 4
 
@@ -31,7 +31,7 @@ def resolve_dns(domain: str) -> dict:
     caa = q("CAA")
 
     ips = sorted({*a, *aaaa})
-    ptr = {ip: ptr_for_ip(ip) for ip in ips}
+    ptr = {ip: ptr_for_ip(ip) for ip in ips} if include_ptr else {}
 
     return {
         "domain": domain,
@@ -47,3 +47,19 @@ def resolve_dns(domain: str) -> dict:
         "ips": ips,
         "PTR": ptr,
     }
+
+
+def resolve_ips(domain: str) -> list[str]:
+    r = dns.resolver.Resolver()
+    r.lifetime = 3
+
+    def q(qtype: str) -> list[str]:
+        try:
+            ans = r.resolve(domain, qtype)
+            return [str(x).rstrip(".") for x in ans]
+        except Exception:
+            return []
+
+    a = q("A")
+    aaaa = q("AAAA")
+    return sorted({*a, *aaaa})

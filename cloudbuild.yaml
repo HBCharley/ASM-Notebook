@@ -1,0 +1,19 @@
+substitutions:
+  _IMAGE: "asia-southeast1-docker.pkg.dev/project-4065010e-cfdb-446a-97a/asm-notebook/asm-notebook:latest"
+  _VITE_GOOGLE_CLIENT_ID: ""
+  _VITE_API_PREFIX: "/api/v1"
+
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_IMAGE}"
+      - "--build-arg"
+      - "VITE_GOOGLE_CLIENT_ID=${_VITE_GOOGLE_CLIENT_ID}"
+      - "--build-arg"
+      - "VITE_API_PREFIX=${_VITE_API_PREFIX}"
+      - "."
+
+images:
+  - "${_IMAGE}"

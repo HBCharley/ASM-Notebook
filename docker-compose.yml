@@ -1,11 +1,80 @@
 services:
-  asm:
-    build: .
-    ports:
-      - "8000:8000"
-    volumes:
-      - asm_data:/data
+  db:
+    image: postgres:16-alpine
+    container_name: asm-db
     restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-}
+        VITE_API_PREFIX: ${VITE_API_PREFIX:-/api/v1}
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID:-}
+    container_name: asm-app
+    depends_on:
+      db:
+        condition: service_healthy
+      tasks:
+        condition: service_started
+    environment:
+      ASM_DATABASE_URL: ${ASM_DATABASE_URL}
+      ASM_CORS_ORIGINS: ${ASM_CORS_ORIGINS:-}
+      ASM_TEST_MODE: ${ASM_TEST_MODE:-0}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      USER_EMAILS: ${USER_EMAILS:-}
+      PUBLIC_COMPANY_SLUGS: ${PUBLIC_COMPANY_SLUGS:-company-a,company-b}
+      ADMIN_SCAN_COOLDOWN_SECONDS: ${ADMIN_SCAN_COOLDOWN_SECONDS:-300}
+      ADMIN_SCANS_PER_HOUR: ${ADMIN_SCANS_PER_HOUR:-20}
+      USER_SCAN_COOLDOWN_SECONDS: ${USER_SCAN_COOLDOWN_SECONDS:-1800}
+      USER_SCANS_PER_HOUR: ${USER_SCANS_PER_HOUR:-2}
+      ASM_TASKS_ENABLED: ${ASM_TASKS_ENABLED:-1}
+      ASM_TASKS_PROJECT: ${ASM_TASKS_PROJECT:-local}
+      ASM_TASKS_LOCATION: ${ASM_TASKS_LOCATION:-asia-southeast1}
+      ASM_TASKS_QUEUE: ${ASM_TASKS_QUEUE:-scan-runner}
+      ASM_TASKS_TARGET_BASE: ${ASM_TASKS_TARGET_BASE:-http://app:8080}
+      CLOUD_TASKS_EMULATOR_HOST: ${CLOUD_TASKS_EMULATOR_HOST:-tasks:8123}
+      ASM_TASKS_SECRET: ${ASM_TASKS_SECRET:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - cve_cache:/app/asm_notebook/data/nvd
+    healthcheck:
+      test: [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=3)"
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  tasks:
+    image: ghcr.io/aertje/cloud-tasks-emulator:latest
+    container_name: asm-tasks
+    command: >
+      -host 0.0.0.0 -port 8123
+      -queue "projects/${ASM_TASKS_PROJECT:-local}/locations/${ASM_TASKS_LOCATION:-asia-southeast1}/queues/${ASM_TASKS_QUEUE:-scan-runner}"
+    ports:
+      - "8123:8123"
 
 volumes:
-  asm_data:
+  postgres_data:
+  cve_cache:
