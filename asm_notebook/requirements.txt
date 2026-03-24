@@ -1,3 +1,15 @@
-flask
+fastapi
 typer
 sqlalchemy
+pydantic
+httpx
+dnspython
+rich
+uvicorn
+psycopg[binary]
+alembic
+ipwhois
+cryptography
+google-auth
+requests
+google-cloud-tasks

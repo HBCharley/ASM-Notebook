@@ -371,1622 +371,296 @@ function formatCertEntity(entity) {
   return String(entity);
 }
 
+// ---------------------------------------------------------------------------
+// buildNestedTree — builds a parent→children tree from a flat domain list
+// ---------------------------------------------------------------------------
+function buildNestedTree(root, subdomains) {
+  const domainSet = new Set(subdomains);
+  const childrenOf = new Map([[root, []]]);
+  subdomains.forEach((d) => childrenOf.set(d, []));
+  const sorted = [...subdomains].sort(
+    (a, b) => a.split(".").length - b.split(".").length || a.localeCompare(b)
+  );
+  sorted.forEach((domain) => {
+    const parts = domain.split(".");
+    let parent = root;
+    for (let i = 1; i < parts.length; i++) {
+      const candidate = parts.slice(i).join(".");
+      if (candidate === root) { parent = root; break; }
+      if (domainSet.has(candidate)) { parent = candidate; break; }
+    }
+    childrenOf.get(parent).push(domain);
+  });
+  function buildNode(domain, parentDomain) {
+    const label = domain.slice(0, domain.length - parentDomain.length - 1);
+    return {
+      domain,
+      label,
+      children: (childrenOf.get(domain) || [])
+        .sort((a, b) => a.localeCompare(b))
+        .map((c) => buildNode(c, domain)),
+    };
+  }
+  return (childrenOf.get(root) || [])
+    .sort((a, b) => a.localeCompare(b))
+    .map((d) => buildNode(d, root));
+}
+
+// ---------------------------------------------------------------------------
+// DomainRelationshipGraph — directory-tree view
+// ---------------------------------------------------------------------------
 function DomainRelationshipGraph({ artifacts, maxLabelCap = 36, minCveSeverity }) {
-  const [hoveredKey, setHoveredKey] = useState(null);
-  const [selectedKey, setSelectedKey] = useState(null);
-  const [treeOpen, setTreeOpen] = useState(false);
-  const [hideUnreachable, setHideUnreachable] = useState(false);
-  const [graphSourceOpen, setGraphSourceOpen] = useState(false);
-  const [graphSourceKey, setGraphSourceKey] = useState("intel");
-  const [expandedRoots, setExpandedRoots] = useState({});
+  const [selectedDomain, setSelectedDomain] = useState(null);
+  const [expandedNodes, setExpandedNodes] = useState({});
   const [domainFilter, setDomainFilter] = useState("");
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const panTargetRef = useRef({ x: 0, y: 0 });
-  const zoomTargetRef = useRef(1);
-  const animatingRef = useRef(false);
-  const zoomRef = useRef(1);
-  const panRef = useRef({ x: 0, y: 0 });
-  const [dragging, setDragging] = useState(false);
-  const [dragStart, setDragStart] = useState(null);
-  const [graphEl, setGraphEl] = useState(null);
-  useEffect(() => {
-    zoomRef.current = zoom;
-  }, [zoom]);
+  const [hideUnreachable, setHideUnreachable] = useState(false);
 
-  useEffect(() => {
-    panRef.current = pan;
-  }, [pan]);
-
-  function startAnimation() {
-    if (animatingRef.current) return;
-    animatingRef.current = true;
-    const step = () => {
-      const targetZoom = zoomTargetRef.current;
-      const targetPan = panTargetRef.current;
-      setZoom((z) => {
-        const next = z + (targetZoom - z) * 0.18;
-        return Math.abs(targetZoom - next) < 0.01 ? targetZoom : next;
-      });
-      setPan((p) => {
-        const nx = p.x + (targetPan.x - p.x) * 0.2;
-        const ny = p.y + (targetPan.y - p.y) * 0.2;
-        const done =
-          Math.abs(targetPan.x - nx) < 0.5 && Math.abs(targetPan.y - ny) < 0.5;
-        return done ? targetPan : { x: nx, y: ny };
-      });
-
-      const zoomDone = Math.abs(zoomTargetRef.current - zoomRef.current) < 0.01;
-      const panDone =
-        Math.abs(panTargetRef.current.x - panRef.current.x) < 0.5 &&
-        Math.abs(panTargetRef.current.y - panRef.current.y) < 0.5;
-      if (zoomDone && panDone) {
-        animatingRef.current = false;
-        return;
-      }
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }
-
-  function setZoomTarget(value) {
-    zoomTargetRef.current = clampZoom(value);
-    startAnimation();
-  }
-
-  function setPanTarget(next) {
-    panTargetRef.current = next;
-    startAnimation();
-  }
-  const intelByDomain = useMemo(
-    () =>
-      new Map(
-        (artifacts?.dns_intel?.domains || []).map((row) => [row.domain, row])
-      ),
+  const roots = useMemo(
+    () => Array.from(new Set(artifacts?.domains?.roots || [])).sort(),
     [artifacts]
   );
-  const unreachableDomains = useMemo(
-    () =>
-      new Set(
-        (artifacts?.dns_intel?.domains || [])
-          .filter((row) => row?.domain && !row?.web?.reachable)
-          .map((row) => row.domain)
-      ),
+  const allDomains = useMemo(
+    () => Array.from(new Set([...(artifacts?.domains?.domains || []), ...roots])),
+    [artifacts, roots]
+  );
+  const dnsIndex = useMemo(
+    () => buildDnsIndex(artifacts?.dns?.records || []),
     [artifacts]
   );
-  const graph = useMemo(() => {
-    const unreachableRootLabel = "Unreachable";
-    const roots = Array.from(new Set(artifacts?.domains?.roots || []));
-    const allDomains = Array.from(
-      new Set([...(artifacts?.domains?.domains || []), ...roots])
-    );
-    const dnsIndex = buildDnsIndex(artifacts?.dns?.records || []);
-
-    if (!allDomains.length) {
-      return null;
-    }
-
-    const width = 920;
-    const height = 520;
-    const cx = 320;
-    const cy = 260;
-
-    const rootAngles = new Map();
-    roots.forEach((root, i) => {
-      const angle = (Math.PI * 2 * i) / Math.max(roots.length, 1) - Math.PI / 2;
-      rootAngles.set(root, angle);
-    });
-
-    const rootNodes = roots.map((root) => {
-      const angle = rootAngles.get(root) ?? -Math.PI / 2;
-      return {
-        key: `root:${root}`,
-        domain: root,
-        kind: "root",
-        isUnreachableBucket: false,
-        x: cx + Math.cos(angle) * 78,
-        y: cy + Math.sin(angle) * 78,
-      };
-    });
-
-    const grouped = new Map();
-    roots.forEach((r) => grouped.set(r, []));
-    const unscoped = [];
-    const unreachable = [];
-
-    allDomains.forEach((domain) => {
-      if (roots.includes(domain)) return;
-      if (hideUnreachable && unreachableDomains.has(domain)) {
-        unreachable.push(domain);
-        return;
-      }
-      const parent = roots.find((r) => isInRootScope(domain, r));
-      if (parent) {
-        grouped.get(parent).push(domain);
-      } else {
-        unscoped.push(domain);
-      }
-    });
-
-    const domainNodes = [];
-    const edges = [];
-
-    roots.forEach((root) => {
-      const domains = grouped.get(root) || [];
-      const rootNode = rootNodes.find((r) => r.domain === root);
-      const rootBase = Math.atan2(
-        (rootNode?.y ?? cy) - cy,
-        (rootNode?.x ?? cx) - cx
-      );
-      const useFull360 = domains.length > 20; // >5 domains per 90 degrees
-
-      domains.forEach((domain, idx) => {
-        let angle;
-        let radius;
-        if (useFull360) {
-          const golden = 2.399963229728653;
-          angle = idx * golden;
-          radius = 70 + 16 * Math.sqrt(idx + 1);
-        } else {
-          // Lower-density hubs use a constrained arc to keep local structure readable.
-          const spread = Math.min(Math.PI * 1.25, Math.max(0.7, domains.length * 0.19));
-          const t = domains.length <= 1 ? 0 : idx / (domains.length - 1) - 0.5;
-          angle = rootBase + t * spread;
-          radius = 64 + (idx % 5) * 18 + Math.floor(idx / 5) * 6;
-        }
-        const node = {
-          key: `domain:${domain}`,
-          domain,
-          kind: "domain",
-          root,
-          x: (rootNode?.x ?? cx) + Math.cos(angle) * radius,
-          y: (rootNode?.y ?? cy) + Math.sin(angle) * radius,
-        };
-        domainNodes.push(node);
-        edges.push({
-          key: `edge:${root}->${domain}`,
-          from: root,
-          to: domain,
-        });
-      });
-    });
-
-    unscoped.forEach((domain, idx) => {
-      const angle = Math.PI / 3 + (idx / Math.max(unscoped.length, 1)) * (Math.PI / 1.5);
-      const node = {
-        key: `domain:${domain}`,
-        domain,
-        kind: "domain",
-        root: null,
-        x: cx + Math.cos(angle) * 250,
-        y: cy + Math.sin(angle) * 250,
-      };
-      domainNodes.push(node);
-    });
-
-    if (hideUnreachable && unreachable.length) {
-      const unreachableRoot = {
-        key: `root:${unreachableRootLabel}`,
-        domain: unreachableRootLabel,
-        kind: "root",
-        isUnreachableBucket: true,
-        x: cx + 236,
-        y: cy,
-      };
-      rootNodes.push(unreachableRoot);
-      unreachable.sort((a, b) => a.localeCompare(b));
-      unreachable.forEach((domain, idx) => {
-        const base = (Math.PI * 2 * idx) / Math.max(unreachable.length, 1) - Math.PI / 2;
-        const radius = 52 + (idx % 4) * 14 + Math.floor(idx / 4) * 5;
-        const node = {
-          key: `domain:${domain}`,
-          domain,
-          kind: "domain",
-          root: unreachableRootLabel,
-          x: unreachableRoot.x + Math.cos(base) * radius,
-          y: unreachableRoot.y + Math.sin(base) * radius,
-          unreachable: true,
-        };
-        domainNodes.push(node);
-        edges.push({
-          key: `edge:${unreachableRootLabel}->${domain}`,
-          from: unreachableRootLabel,
-          to: domain,
-        });
-      });
-    }
-
-    const nodeMap = new Map(
-      [...rootNodes, ...domainNodes].map((n) => [n.domain, n])
-    );
-    const hub = {
-      key: "hub:scope",
-      domain: "Scan Scope",
-      kind: "hub",
-      x: cx,
-      y: cy,
-    };
-
-    const hubEdges = rootNodes.map((root) => ({
-      key: `edge:hub->${root.domain}`,
-      from: "Scan Scope",
-      to: root.domain,
-    }));
-
-    const nodes = [hub, ...rootNodes, ...domainNodes].map((n) => {
-      const rec = dnsIndex.get(n.domain);
-      const totalRecords = rec
-        ? ["A", "AAAA", "CNAME", "MX", "NS"].reduce(
-            (sum, k) => sum + ((rec[k] || []).length || 0),
-            0
-          )
-        : 0;
-      return {
-        ...n,
-        dns: rec || null,
-        totalRecords,
-      };
-    });
-
-    return {
-      width,
-      height,
-      nodes,
-      edges: [...hubEdges, ...edges],
-      nodeMap,
-      counts: {
-        roots: roots.length,
-        domains: allDomains.length,
-        unreachable: hideUnreachable ? unreachable.length : 0,
-      },
-    };
-  }, [artifacts, hideUnreachable, unreachableDomains]);
-
-  function clampZoom(value) {
-    return Math.max(0.7, Math.min(4.2, +value.toFixed(2)));
-  }
-
-  const graphNodes = graph?.nodes ?? [];
-  const graphCounts = graph?.counts ?? { roots: 0, domains: 0, unreachable: 0 };
-  const graphWidth = graph?.width ?? 920;
-  const graphHeight = graph?.height ?? 520;
-  const hubNode = graph ? graphNodes.find((n) => n.kind === "hub") : null;
-  const rootNodes = graph ? graphNodes.filter((n) => n.kind === "root") : [];
-  const domainNodes = graph ? graphNodes.filter((n) => n.kind === "domain") : [];
-  const detailMode =
-    graphCounts.domains <= maxLabelCap
-      ? "full"
-      : zoom < 1.1
-        ? "overview"
-        : zoom < 1.55
-          ? "focused"
-          : "full";
-
-  useEffect(() => {
-    if (!graphEl) return;
-    const onWheel = (e) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const delta = e.deltaY > 0 ? -0.1 : 0.1;
-      setZoomTarget(zoomTargetRef.current + delta);
-    };
-    graphEl.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      graphEl.removeEventListener("wheel", onWheel);
-    };
-  }, [graphEl]);
-
-  function handleMouseDown(e) {
-    setDragging(true);
-    setDragStart({
-      x: e.clientX - pan.x,
-      y: e.clientY - pan.y,
-    });
-  }
-
-  function handleMouseMove(e) {
-    if (!dragging || !dragStart) return;
-    setPanTarget({
-      x: e.clientX - dragStart.x,
-      y: e.clientY - dragStart.y,
-    });
-  }
-
-  function handleMouseUp() {
-    setDragging(false);
-    setDragStart(null);
-  }
-
-  useEffect(() => {
-    if (!graph) return;
-    const suggested = suggestInitialZoom(
-      graphCounts.domains,
-      graphCounts.roots,
-      maxLabelCap
-    );
-    zoomTargetRef.current = suggested;
-    panTargetRef.current = { x: 0, y: 0 };
-    setZoom(suggested);
-    setPan({ x: 0, y: 0 });
-  }, [artifacts, maxLabelCap]);
-
-  const domainsByRoot = new Map(rootNodes.map((r) => [r.domain, []]));
-  for (const d of domainNodes) {
-    if (d.root && domainsByRoot.has(d.root)) {
-      domainsByRoot.get(d.root).push(d);
-    }
-  }
-  for (const [root, list] of domainsByRoot) {
-    list.sort((a, b) => a.domain.localeCompare(b.domain));
-    domainsByRoot.set(root, list);
-  }
-  const unscopedDomains = domainNodes
-    .filter((d) => !d.root)
-    .slice()
-    .sort((a, b) => a.domain.localeCompare(b.domain));
-  const sortedRoots = rootNodes
-    .slice()
-    .sort((a, b) => a.domain.localeCompare(b.domain));
-  const scopedRoots = sortedRoots.filter((r) => !r.isUnreachableBucket);
-  const unreachableRootNode = sortedRoots.find((r) => r.isUnreachableBucket) || null;
-
-  const renderNodes = hubNode ? [hubNode, ...rootNodes] : [...rootNodes];
-  const renderEdges = hubNode
-    ? rootNodes.map((root) => ({
-        key: `edge:${hubNode.key}->${root.key}`,
-        fromKey: hubNode.key,
-        toKey: root.key,
-      }))
-    : [];
-
-  if (detailMode === "full") {
-    for (const d of domainNodes) {
-      renderNodes.push(d);
-      if (d.root) {
-        renderEdges.push({
-          key: `edge:root:${d.root}->${d.key}`,
-          fromKey: `root:${d.root}`,
-          toKey: d.key,
-        });
-      }
-    }
-  } else if (detailMode === "focused") {
-    const maxPerRoot = Math.max(8, Math.round(zoom * 10));
-    for (const root of rootNodes) {
-      const visible = (domainsByRoot.get(root.domain) || []).slice(0, maxPerRoot);
-      for (const d of visible) {
-        renderNodes.push(d);
-        renderEdges.push({
-          key: `edge:root:${root.domain}->${d.key}`,
-          fromKey: root.key,
-          toKey: d.key,
-        });
-      }
-    }
-  } else {
-    for (const root of rootNodes) {
-      const count = (domainsByRoot.get(root.domain) || []).length;
-      if (!count) continue;
-      const dx = root.x - hubNode.x;
-      const dy = root.y - hubNode.y;
-      const mag = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-      const agg = {
-        key: `aggregate:${root.domain}`,
-        domain: `+${count} domains`,
-        kind: "aggregate",
-        root: root.domain,
-        count,
-        x: root.x + (dx / mag) * 55,
-        y: root.y + (dy / mag) * 55,
-        dns: null,
-        totalRecords: 0,
-      };
-      renderNodes.push(agg);
-      renderEdges.push({
-        key: `edge:${root.key}->${agg.key}`,
-        fromKey: root.key,
-        toKey: agg.key,
-      });
-    }
-  }
-
-  const renderNodeMap = new Map(renderNodes.map((n) => [n.key, n]));
-  const selectedGlobalNode =
-    graphNodes.find((n) => n.key === selectedKey) ||
-    (selectedKey?.startsWith("aggregate:")
-      ? { kind: "aggregate", root: selectedKey.replace("aggregate:", "") }
-      : null);
-  const focusedRoot =
-    selectedGlobalNode?.kind === "root"
-      ? selectedGlobalNode.domain
-      : selectedGlobalNode?.root || null;
-  const focusRootNode = focusedRoot
-    ? renderNodes.find((n) => n.kind === "root" && n.domain === focusedRoot)
-    : null;
-
-  const spreadFactor =
-    focusRootNode && zoom > 1.2 ? 1 + Math.min(2.4, (zoom - 1.2) * 1.0) : 1;
-  const clusterOffsets = new Map();
-  if (focusRootNode && spreadFactor > 1) {
-    for (const root of rootNodes) {
-      if (root.domain === focusedRoot) {
-        clusterOffsets.set(root.domain, { x: 0, y: 0 });
-        continue;
-      }
-      const dx = root.x - focusRootNode.x;
-      const dy = root.y - focusRootNode.y;
-      const mag = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-      const push = (spreadFactor - 1) * 90;
-      clusterOffsets.set(root.domain, {
-        x: (dx / mag) * push,
-        y: (dy / mag) * push,
-      });
-    }
-  }
-
-  const hideNonFocusedDomains = Boolean(focusRootNode && zoom >= 2.2);
-  const displayNodesBase = renderNodes.map((n) => {
-    if (!focusRootNode || spreadFactor === 1) return n;
-    if (n.kind === "hub") return n;
-    const clusterRoot =
-      n.kind === "root" ? n.domain : n.root;
-    if (!clusterRoot || clusterRoot === focusedRoot) return n;
-    if (hideNonFocusedDomains && n.kind === "domain") {
-      return {
-        ...n,
-        hidden: true,
-      };
-    }
-    const off = clusterOffsets.get(clusterRoot);
-    if (!off) return n;
-    return {
-      ...n,
-      x: n.x + off.x,
-      y: n.y + off.y,
-    };
-  });
-  const shouldSpreadAllDomains =
-    selectedGlobalNode?.kind === "hub" || (!selectedGlobalNode && zoom > 2.4);
-  const shouldSpreadFocusedRootDomains = Boolean(focusedRoot);
-  const localSpread =
-    zoom > 1.8 ? 1 + Math.min(1.6, (zoom - 1.8) * 0.65) : 1;
-  const rootMapBase = new Map(
-    displayNodesBase
-      .filter((n) => n.kind === "root")
-      .map((n) => [n.domain, n])
-  );
-  const displayNodes = displayNodesBase.map((n) => {
-    if (n.kind !== "domain" || n.hidden || localSpread === 1) return n;
-    if (shouldSpreadFocusedRootDomains && n.root !== focusedRoot) return n;
-    if (!shouldSpreadFocusedRootDomains && !shouldSpreadAllDomains) return n;
-    const rootNode = rootMapBase.get(n.root);
-    if (!rootNode) return n;
-    const dx = n.x - rootNode.x;
-    const dy = n.y - rootNode.y;
-    return {
-      ...n,
-      x: rootNode.x + dx * localSpread,
-      y: rootNode.y + dy * localSpread,
-    };
-  });
-
-  function applyForceLayout(nodes) {
-    if (detailMode === "overview") return nodes;
-    const result = nodes.map((n) => ({ ...n }));
-    const indexByKey = new Map(result.map((n, i) => [n.key, i]));
-    const rootPositions = new Map(
-      result
-        .filter((n) => n.kind === "root")
-        .map((n) => [n.domain, { x: n.x, y: n.y }])
-    );
-    const domainsByRoot = new Map();
-    const targetMap = new Map();
-    for (const node of result) {
-      if (node.kind !== "domain" || node.hidden || !node.root) continue;
-      if (!domainsByRoot.has(node.root)) domainsByRoot.set(node.root, []);
-      domainsByRoot.get(node.root).push(node.key);
-    }
-    for (const [root, keys] of domainsByRoot) {
-      const rootPos = rootPositions.get(root);
-      if (!rootPos) continue;
-      const total = keys.length;
-      const baseRadius = 90 + Math.sqrt(total) * 8;
-      const spacing = 22;
-      keys.forEach((key, idx) => {
-        const node = result[indexByKey.get(key)];
-        const angle = Math.atan2(node.y - rootPos.y, node.x - rootPos.x);
-        const radius = baseRadius + spacing * Math.sqrt(idx + 1);
-        targetMap.set(key, {
-          x: rootPos.x + Math.cos(angle) * radius,
-          y: rootPos.y + Math.sin(angle) * radius,
-        });
-      });
-    }
-    const repelRadius = 38 + zoom * 7;
-    const repelRadiusSq = repelRadius * repelRadius;
-    const spring = 0.01;
-    const damp = 0.86;
-    const step = 0.18;
-    const iterations = 48;
-    for (const [root, keys] of domainsByRoot) {
-      const rootPos = rootPositions.get(root);
-      if (!rootPos || keys.length < 2) continue;
-      const velocities = new Map(keys.map((k) => [k, { x: 0, y: 0 }]));
-      for (let iter = 0; iter < iterations; iter += 1) {
-        for (let i = 0; i < keys.length; i += 1) {
-          const ki = keys[i];
-          const ni = result[indexByKey.get(ki)];
-          let fx = 0;
-          let fy = 0;
-          for (let j = 0; j < keys.length; j += 1) {
-            if (i === j) continue;
-            const kj = keys[j];
-            const nj = result[indexByKey.get(kj)];
-            const dx = ni.x - nj.x;
-            const dy = ni.y - nj.y;
-            const distSq = dx * dx + dy * dy;
-            if (distSq > 0 && distSq < repelRadiusSq) {
-              const dist = Math.sqrt(distSq);
-              const force = (repelRadius - dist) / repelRadius;
-              fx += (dx / dist) * force * 2.8;
-              fy += (dy / dist) * force * 2.8;
-            }
-          }
-          const target = targetMap.get(ki);
-          if (target) {
-            fx += (target.x - ni.x) * spring;
-            fy += (target.y - ni.y) * spring;
-          } else {
-            const dxr = rootPos.x - ni.x;
-            const dyr = rootPos.y - ni.y;
-            fx += dxr * spring;
-            fy += dyr * spring;
-          }
-          const v = velocities.get(ki);
-          v.x = (v.x + fx * step) * damp;
-          v.y = (v.y + fy * step) * damp;
-        }
-        for (const key of keys) {
-          const n = result[indexByKey.get(key)];
-          const v = velocities.get(key);
-          n.x += v.x;
-          n.y += v.y;
-        }
-      }
-    }
-    return result;
-  }
-
-  const forceNodes = applyForceLayout(displayNodes);
-  const visibleNodes = forceNodes.filter((n) => !n.hidden);
-  const displayNodeMap = new Map(visibleNodes.map((n) => [n.key, n]));
-
-  const outgoing = new Map();
-  for (const edge of renderEdges) {
-    if (!outgoing.has(edge.fromKey)) outgoing.set(edge.fromKey, []);
-    const toNode = displayNodeMap.get(edge.toKey);
-    if (toNode) outgoing.get(edge.fromKey).push(toNode);
-  }
-  const fixedLabelCount = visibleNodes.filter((n) => n.kind !== "domain").length;
-  const labelBudget = Math.max(0, maxLabelCap - fixedLabelCount);
-  const budgetedDomainLabels = new Set(
-    visibleNodes
-      .filter((n) => n.kind === "domain")
-      .sort(
-        (a, b) =>
-          (b.totalRecords || 0) - (a.totalRecords || 0) ||
-          a.domain.localeCompare(b.domain)
-      )
-      .slice(0, labelBudget)
-      .map((n) => n.key)
-  );
-  const labelFontSize = Math.max(4.2, 10 / Math.pow(Math.max(1, zoom), 1.9));
-  const shouldShowLabel = (node) =>
-    node.kind !== "domain" ||
-    budgetedDomainLabels.has(node.key);
-  const labelPositions = (() => {
-    const placed = [];
+  const riskByDomain = useMemo(() => {
     const map = new Map();
-    const options = [
-      [8, 1],
-      [14, 8],
-      [14, -8],
-      [20, 12],
-      [20, -12],
-      [0, 16],
-      [0, -16],
-      [28, 0],
-      [-12, 0],
-    ];
-    const candidates = [
-      ...visibleNodes.filter((n) => n.kind !== "domain"),
-      ...visibleNodes
-        .filter((n) => n.kind === "domain" && budgetedDomainLabels.has(n.key))
-        .sort(
-          (a, b) =>
-            (b.totalRecords || 0) - (a.totalRecords || 0) ||
-            a.domain.localeCompare(b.domain)
-        ),
-    ];
-    for (const node of candidates) {
-      if (!shouldShowLabel(node)) continue;
-      const label = node.domain || "";
-      const width = Math.max(10, label.length * labelFontSize * 0.58);
-      const height = labelFontSize + 3;
-      let placedBox = null;
-      for (const [ox, oy] of options) {
-        const x = node.x + ox;
-        const y = node.y + oy;
-        const box = { x, y: y - height / 2, w: width, h: height };
-        const collides = placed.some(
-          (p) =>
-            box.x < p.x + p.w &&
-            box.x + box.w > p.x &&
-            box.y < p.y + p.h &&
-            box.y + box.h > p.y
-        );
-        if (!collides) {
-          placedBox = box;
-          map.set(node.key, { x, y, hidden: false });
-          placed.push(box);
-          break;
-        }
-      }
+    for (const f of artifacts?.risk?.findings || []) {
+      if (!map.has(f.domain)) map.set(f.domain, []);
+      map.get(f.domain).push(f);
     }
     return map;
-  })();
-  const selectedNode =
-    (selectedKey && displayNodeMap.get(selectedKey)) ||
-    graphNodes.find((n) => n.key === selectedKey) ||
-    null;
-  const hoveredNode =
-    selectedNode || displayNodeMap.get(hoveredKey) || hubNode;
-  const dnsSummary = artifacts?.dns?.summary || null;
-  const intelSummary = artifacts?.dns_intel?.summary || null;
-  const allDomains = artifacts?.domains?.domains || [];
-  const domainList = useMemo(() => {
-    const list = allDomains.filter((d) => {
-      if (focusedRoot && !isInRootScope(d, focusedRoot)) return false;
-      if (!domainFilter) return true;
-      return d.includes(domainFilter.trim().toLowerCase());
-    });
-    return list.sort((a, b) => a.localeCompare(b));
-  }, [allDomains, focusedRoot, domainFilter]);
-  const nodeIntel = hoveredNode?.domain ? intelByDomain.get(hoveredNode.domain) : null;
-  const ptrValues = hoveredNode?.dns?.PTR
-    ? Object.values(hoveredNode.dns.PTR).flat().filter(Boolean)
-    : [];
-  const graphSourceOptions = useMemo(() => {
-    if (!hoveredNode) return [];
-    const options = [];
-    if (nodeIntel) options.push({ key: "intel", label: "Intel" });
-    if (hoveredNode.dns) options.push({ key: "dns", label: "DNS" });
-    if (nodeIntel?.web) options.push({ key: "web", label: "Web" });
-    return options;
-  }, [hoveredNode, nodeIntel]);
-  const graphSourcePayload =
-    graphSourceKey === "dns"
-      ? hoveredNode?.dns
-      : graphSourceKey === "web"
-        ? nodeIntel?.web
-        : nodeIntel;
+  }, [artifacts]);
+  const idbByIp = useMemo(() => artifacts?.shodan_idb || {}, [artifacts]);
+
+  // Expand roots by default
   useEffect(() => {
-    if (!graphSourceOptions.length) {
-      setGraphSourceOpen(false);
-      setGraphSourceKey("intel");
-      return;
-    }
-    if (!graphSourceOptions.some((opt) => opt.key === graphSourceKey)) {
-      setGraphSourceKey(graphSourceOptions[0].key);
-    }
-  }, [graphSourceOptions, graphSourceKey]);
-  const securityHeaderKeys = nodeIntel?.web?.security_headers
-    ? Object.keys(nodeIntel.web.security_headers)
-    : [];
-  const fingerprints = nodeIntel?.web?.fingerprints || [];
-  const reportedVersions = nodeIntel?.web?.reported_versions || [];
-  const technologies = nodeIntel?.web?.technologies || [];
-  const hsts = nodeIntel?.web?.hsts || null;
-  const tls = nodeIntel?.web?.tls || null;
-  const ipAsn = nodeIntel?.ip_asn || [];
-  const edgeProvider = nodeIntel?.web?.edge_provider || null;
-  const cloudStorage = nodeIntel?.web?.cloud_storage || null;
-  const deepScan = nodeIntel?.web?.deep_scan || null;
-  const mailProviders = nodeIntel?.mail_providers || [];
-  const exposureScore = nodeIntel?.exposure_score ?? null;
-  const exposureFactors = nodeIntel?.exposure_factors || [];
-  const cveFindings = nodeIntel?.cve_findings || [];
-  const visibleCveFindings = filterFindings(cveFindings, minCveSeverity);
-  const cveCounts = countFindingsBySeverity(visibleCveFindings);
-  const certNotBefore =
-    tls?.cert?.not_before ||
-    tls?.cert?.notBefore ||
-    tls?.cert?.valid_from ||
-    tls?.cert?.validFrom ||
-    "";
-  const certNotAfter =
-    tls?.cert?.not_after ||
-    tls?.cert?.notAfter ||
-    tls?.cert?.valid_until ||
-    tls?.cert?.validUntil ||
-    "";
-
-  function focusNode(node, targetZoom = Math.max(zoom, 2.1)) {
-    const z = clampZoom(Math.max(targetZoom, 2.5));
-    setZoomTarget(z);
-    setPanTarget({
-      x: -z * (node.x - graphWidth / 2),
-      y: -z * (node.y - graphHeight / 2),
+    setExpandedNodes((prev) => {
+      const next = { ...prev };
+      roots.forEach((r) => { if (!(r in next)) next[r] = true; });
+      return next;
     });
-    setSelectedKey(node.key);
-  }
+  }, [roots.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function toggleRoot(rootDomain) {
-    setExpandedRoots((prev) => ({
-      ...prev,
-      [rootDomain]: !prev[rootDomain],
-    }));
-  }
-
-  function selectFromTree(node) {
-    setHoveredKey(node.key);
-    if (node.kind === "domain" || node.kind === "root") {
-      focusNode(node, node.kind === "domain" ? 2.5 : 2.1);
-      return;
+  const treeByRoot = useMemo(() => {
+    const result = {};
+    for (const root of roots) {
+      const subs = allDomains.filter((d) => d !== root && isInRootScope(d, root));
+      result[root] = buildNestedTree(root, subs);
     }
-    setSelectedKey(node.key);
-    setPanTarget({ x: 0, y: 0 });
-    setZoomTarget(1.3);
-  }
+    return result;
+  }, [roots, allDomains]);
 
-  useEffect(() => {
-    const nextExpanded = {};
-    scopedRoots.slice(0, 2).forEach((root) => {
-      nextExpanded[root.domain] = true;
-    });
-    if (unreachableRootNode) {
-      nextExpanded[unreachableRootNode.domain] = true;
+  const totalDomains = allDomains.length - roots.length;
+  const filterLower = domainFilter.toLowerCase().trim();
+
+  const SEV = { critical: "var(--danger)", high: "#f59e0b", medium: "#3b82f6", low: "#6b7280" };
+
+  function topSevColour(domain) {
+    const ff = riskByDomain.get(domain) || [];
+    for (const s of ["critical", "high", "medium", "low"]) {
+      if (ff.some((f) => f.severity === s)) return SEV[s];
     }
-    setExpandedRoots(nextExpanded);
-  }, [artifacts, hideUnreachable]);
-
-  if (!graph || !hubNode) {
-    return <div className="empty">No graphable domain artifacts for this scan</div>;
+    return null;
   }
+
+  function dnsBadges(dns) {
+    if (!dns) return [{ k: "no-dns" }];
+    const out = [];
+    if (dns.A?.length)     out.push({ k: "A:" + dns.A.length });
+    if (dns.AAAA?.length)  out.push({ k: "AAAA:" + dns.AAAA.length });
+    if (dns.CNAME?.length) out.push({ k: "CN:" + dns.CNAME.length });
+    if (dns.MX?.length)    out.push({ k: "MX:" + dns.MX.length });
+    return out.slice(0, 3);
+  }
+
+  function anyMatch(node) {
+    if (!filterLower) return true;
+    if (node.domain.includes(filterLower)) return true;
+    return node.children.some(anyMatch);
+  }
+
+  function renderNode(node, depth) {
+    if (!anyMatch(node)) return null;
+    const { domain, label, children } = node;
+    const dns = dnsIndex.get(domain);
+    if (hideUnreachable && (!dns || (!dns.A?.length && !dns.AAAA?.length))) return null;
+    const hasCh = children.length > 0;
+    const expanded = !!expandedNodes[domain];
+    const selected = selectedDomain === domain;
+    const sev = topSevColour(domain);
+    const firstIp = dns?.ips?.[0] || "";
+    const badges = dnsBadges(dns);
+    return (
+      <div key={domain}>
+        <button
+          className={"tree-item tree-item-domain" + (selected ? " active" : "")}
+          style={{ paddingLeft: 8 + depth * 16, gap: 5, width: "100%", display: "flex", alignItems: "center" }}
+          onClick={() => {
+            setSelectedDomain(selected ? null : domain);
+            if (hasCh) setExpandedNodes((p) => ({ ...p, [domain]: !p[domain] }));
+          }}
+        >
+          <span style={{ color: "var(--muted)", fontSize: 10, minWidth: 10, flexShrink: 0 }}>
+            {hasCh ? (expanded ? "▾" : "▸") : "·"}
+          </span>
+          {sev && <span style={{ width: 6, height: 6, borderRadius: "50%", background: sev, flexShrink: 0 }} />}
+          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
+            <span style={{ fontWeight: 600 }}>{label}</span>
+            <span className="muted" style={{ fontSize: 11 }}>{"." + domain.slice(label.length + 1)}</span>
+          </span>
+          {firstIp && <span className="muted" style={{ fontSize: 11, flexShrink: 0, marginRight: 4 }}>{firstIp}</span>}
+          <span style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+            {badges.map((b) => <span key={b.k} className="graph-chip" style={{ fontSize: 10, padding: "1px 4px" }}>{b.k}</span>)}
+          </span>
+        </button>
+        {hasCh && expanded && <div>{children.map((c) => renderNode(c, depth + 1))}</div>}
+      </div>
+    );
+  }
+
+  const selDns   = selectedDomain ? dnsIndex.get(selectedDomain) : null;
+  const selRisk  = selectedDomain ? (riskByDomain.get(selectedDomain) || []) : [];
+  const selIps   = selDns?.ips || [];
+  const selIdb   = selIps.map((ip) => (idbByIp[ip] ? { ip, ...idbByIp[ip] } : null)).filter(Boolean);
+
+  if (!roots.length) return <div className="empty">No domain artifacts for this scan.</div>;
 
   return (
     <div className="graph-wrap">
-      <div className="graph-meta muted">
-        {graphCounts.roots} roots · {graphCounts.domains} domains · mode: {detailMode} · labels: {maxLabelCap}
-        {hideUnreachable ? ` · unreachable bucket: ${graphCounts.unreachable}` : ""}
+      {/* top bar */}
+      <div className="graph-meta muted" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", paddingBottom: 8 }}>
+        <span>{roots.length} {roots.length === 1 ? "root" : "roots"} &middot; {totalDomains} domains</span>
+        <input type="search" value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)}
+          placeholder="Filter domains..."
+          style={{ fontSize: 12, padding: "2px 8px", background: "var(--card)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--ink)", width: 200 }} />
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, cursor: "pointer" }}>
+          <input type="checkbox" checked={hideUnreachable} onChange={(e) => setHideUnreachable(e.target.checked)} />
+          Hide no-DNS
+        </label>
       </div>
-      <div className="graph-grid">
-        <div className="graph-canvas">
-          <button
-            className={`graph-nav-bug ${treeOpen ? "active" : ""}`}
-            onClick={() => setTreeOpen((v) => !v)}
-            aria-pressed={treeOpen}
-          >
-            {treeOpen ? "Hide tree" : "Tree view"}
-          </button>
-          {treeOpen ? (
-            <div className="graph-tree panel">
-              <div className="graph-tree-head">
-                <strong>Scope Browser</strong>
-                <span className="muted">
-                  {graphCounts.roots} roots · {graphCounts.domains} domains
-                </span>
-              </div>
-              <button
-                className={`tree-item tree-item-hub ${selectedKey === hubNode.key ? "active" : ""}`}
-                onClick={() => selectFromTree(hubNode)}
-              >
-                Scan Scope
-              </button>
-              <div className="tree-section muted">Roots</div>
-              {scopedRoots.map((root) => {
-                const rootDomains = domainsByRoot.get(root.domain) || [];
-                const isOpen = !!expandedRoots[root.domain];
-                return (
-                  <div key={`tree-root-${root.domain}`} className="tree-branch">
-                    <button
-                      className={`tree-item tree-item-root ${selectedKey === root.key ? "active" : ""}`}
-                      onClick={() => {
-                        toggleRoot(root.domain);
-                        selectFromTree(root);
-                      }}
-                    >
-                      <span>{isOpen ? "▾" : "▸"} {root.domain}</span>
-                      <span className="tree-count">{rootDomains.length}</span>
-                    </button>
-                    {isOpen ? (
-                      <div className="tree-children">
-                        {rootDomains.map((domainNode) => {
-                          const domainIntel = intelByDomain.get(domainNode.domain);
-                          return (
-                            <button
-                              key={`tree-domain-${domainNode.domain}`}
-                              className={`tree-item tree-item-domain ${selectedKey === domainNode.key ? "active" : ""}`}
-                              onClick={() => selectFromTree(domainNode)}
-                            >
-                              <span className="tree-domain-name">{domainNode.domain}</span>
-                              <span className="tree-domain-props">
-                                {domainIntel?.resolves ? "DNS" : "No DNS"}
-                                {domainIntel?.web?.reachable ? ` · HTTP ${domainIntel.web.status_code ?? "-"}` : ""}
-                              </span>
-                            </button>
-                          );
-                        })}
-                        {rootDomains.length === 0 ? (
-                          <div className="muted tree-empty">No discovered domains</div>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-              {unreachableRootNode ? (
-                <>
-                  <div className="tree-section muted">Unreachable</div>
-                  <div className="tree-branch">
-                    <button
-                      className={`tree-item tree-item-root tree-item-unreachable ${selectedKey === unreachableRootNode.key ? "active" : ""}`}
-                      onClick={() => {
-                        toggleRoot(unreachableRootNode.domain);
-                        selectFromTree(unreachableRootNode);
-                      }}
-                    >
-                      <span>
-                        {!!expandedRoots[unreachableRootNode.domain] ? "▾" : "▸"} {unreachableRootNode.domain}
-                      </span>
-                      <span className="tree-count">
-                        {(domainsByRoot.get(unreachableRootNode.domain) || []).length}
-                      </span>
-                    </button>
-                    {!!expandedRoots[unreachableRootNode.domain] ? (
-                      <div className="tree-children">
-                        {(domainsByRoot.get(unreachableRootNode.domain) || []).map((domainNode) => {
-                          const domainIntel = intelByDomain.get(domainNode.domain);
-                          return (
-                            <button
-                              key={`tree-unreachable-${domainNode.domain}`}
-                              className={`tree-item tree-item-domain ${selectedKey === domainNode.key ? "active" : ""}`}
-                              onClick={() => selectFromTree(domainNode)}
-                            >
-                              <span className="tree-domain-name">{domainNode.domain}</span>
-                              <span className="tree-domain-props">
-                                {domainIntel?.resolves ? "DNS" : "No DNS"}
-                                {domainIntel?.web?.reachable ? ` · HTTP ${domainIntel.web.status_code ?? "-"}` : " · unreachable"}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : null}
-                  </div>
-                </>
-              ) : null}
-              {unscopedDomains.length ? (
-                <>
-                  <div className="tree-section muted">Unscoped</div>
-                  <div className="tree-children">
-                    {unscopedDomains.map((domainNode) => {
-                      const domainIntel = intelByDomain.get(domainNode.domain);
-                      return (
-                        <button
-                          key={`tree-unscoped-${domainNode.domain}`}
-                          className={`tree-item tree-item-domain ${selectedKey === domainNode.key ? "active" : ""}`}
-                          onClick={() => selectFromTree(domainNode)}
-                        >
-                          <span className="tree-domain-name">{domainNode.domain}</span>
-                          <span className="tree-domain-props">
-                            {domainIntel?.resolves ? "DNS" : "No DNS"}
-                            {domainIntel?.web?.reachable ? ` · HTTP ${domainIntel.web.status_code ?? "-"}` : ""}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
-              ) : null}
-            </div>
-          ) : null}
-          <svg
-            ref={setGraphEl}
-            className={`domain-graph ${dragging ? "dragging" : ""}`}
-            viewBox={`0 0 ${graphWidth} ${graphHeight}`}
-            role="img"
-            aria-label="Domain relationship graph"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-          >
-            <g
-              transform={`translate(${pan.x} ${pan.y}) translate(${graphWidth / 2} ${graphHeight / 2}) scale(${zoom}) translate(${-graphWidth / 2} ${-graphHeight / 2})`}
-            >
-              {renderEdges.map((e) => {
-                const from = displayNodeMap.get(e.fromKey);
-                const to = displayNodeMap.get(e.toKey);
-                if (!from || !to) return null;
-                return (
-                  <line
-                    key={e.key}
-                    x1={from.x}
-                    y1={from.y}
-                    x2={to.x}
-                    y2={to.y}
-                    className="graph-edge"
-                  />
-                );
-              })}
 
-              {visibleNodes.map((node) => (
-                <g
-                  key={node.key}
-                  className={`graph-node graph-node-${node.kind} ${node.unreachable || node.isUnreachableBucket ? "graph-node-unreachable" : ""}`.trim()}
-                  onMouseEnter={() => setHoveredKey(node.key)}
-                  onMouseLeave={() => setHoveredKey(null)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedKey(node.key);
+      {/* two-panel body */}
+      <div style={{ display: "flex", height: "clamp(420px, 60vh, 780px)", border: "1px solid var(--line)", borderRadius: 6, overflow: "hidden" }}>
+
+        {/* tree */}
+        <div className="panel"
+          style={{ flex: selectedDomain ? "0 0 52%" : "1 1 100%", overflowY: "auto", borderRight: selectedDomain ? "1px solid var(--line)" : "none", padding: "6px 0" }}>
+          {roots.map((root) => {
+            const open = !!expandedNodes[root];
+            const nodes = treeByRoot[root] || [];
+            const cnt = allDomains.filter((d) => d !== root && isInRootScope(d, root)).length;
+            const sev = topSevColour(root);
+            if (filterLower && !root.includes(filterLower) && !nodes.some(anyMatch)) return null;
+            return (
+              <div key={root} className="tree-branch">
+                <button
+                  className={"tree-item tree-item-root" + (selectedDomain === root ? " active" : "")}
+                  style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", paddingLeft: 10 }}
+                  onClick={() => {
+                    setSelectedDomain(selectedDomain === root ? null : root);
+                    setExpandedNodes((p) => ({ ...p, [root]: !p[root] }));
                   }}
                 >
-                  <circle
-                    cx={node.x}
-                    cy={node.y}
-                    r={
-                      node.kind === "hub"
-                        ? 8.125
-                        : node.kind === "root"
-                          ? 4.6875
-                          : node.kind === "aggregate"
-                            ? 3.875
-                            : 3.4375
-                    }
-                  />
-                  {labelPositions.has(node.key) ||
-                  node.key === hoveredKey ||
-                  node.key === selectedKey ? (
-                    <text
-                      className="graph-label"
-                      x={(labelPositions.get(node.key)?.x ?? node.x + 8)}
-                      y={(labelPositions.get(node.key)?.y ?? node.y + 1)}
-                      fontSize={labelFontSize}
-                    >
-                      {node.domain}
-                    </text>
-                  ) : null}
-                </g>
-              ))}
-            </g>
-          </svg>
-          <div className="graph-help-bug">Ctrl + Scroll to zoom</div>
+                  <span style={{ fontSize: 11, minWidth: 10, flexShrink: 0 }}>{open ? "▾" : "▸"}</span>
+                  {sev && <span style={{ width: 7, height: 7, borderRadius: "50%", background: sev, flexShrink: 0 }} />}
+                  <span style={{ fontSize: 13 }}>{open ? "📂" : "📁"}</span>
+                  <strong style={{ flex: 1, textAlign: "left" }}>{root}</strong>
+                  <span className="tree-count">{cnt}</span>
+                </button>
+                {open && (
+                  <div className="tree-children">
+                    {nodes.length === 0
+                      ? <div className="muted tree-empty" style={{ paddingLeft: 32 }}>No discovered subdomains</div>
+                      : nodes.map((n) => renderNode(n, 1))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
-        <div className={`graph-hover panel ${selectedNode ? "floating overlay" : ""}`}>
-          {selectedNode ? (
-            <div className="graph-hover-head">
-              <div>
-                <div className="muted">Details</div>
-                <div className="graph-hover-title">
-                  {hoveredNode?.domain || "Selection"}
-                </div>
-              </div>
-              <div className="graph-hover-actions">
-                <button
-                  className="ghost"
-                  onClick={() => setGraphSourceOpen((prev) => !prev)}
-                  disabled={!graphSourceOptions.length}
-                >
-                  {graphSourceOpen ? "Hide source" : "Show source"}
-                </button>
-                <button className="ghost" onClick={() => setSelectedKey(null)}>
-                  Close
-                </button>
-              </div>
+        {/* detail */}
+        {selectedDomain && (
+          <div className="panel" style={{ flex: "0 0 48%", overflowY: "auto", padding: "14px 16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, gap: 8 }}>
+              <span style={{ fontWeight: 700, wordBreak: "break-all", fontSize: 13 }}>{selectedDomain}</span>
+              <button onClick={() => setSelectedDomain(null)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", fontSize: 18, lineHeight: 1, padding: 0, flexShrink: 0 }}>&times;</button>
             </div>
-          ) : null}
-          <div className="graph-controls">
-            <button className="ghost" onClick={() => setZoom((z) => clampZoom(z - 0.15))}>
-              -
-            </button>
-            <span className="muted">{Math.round(zoom * 100)}%</span>
-            <button className="ghost" onClick={() => setZoom((z) => clampZoom(z + 0.2))}>
-              +
-            </button>
-            <button
-              className="ghost"
-              onClick={() => {
-                setZoom(1);
-                setPan({ x: 0, y: 0 });
-              }}
-            >
-              Reset
-            </button>
-            <label className="graph-toggle muted">
-              <input
-                type="checkbox"
-                checked={hideUnreachable}
-                onChange={(e) => setHideUnreachable(e.target.checked)}
-              />
-              Hide unreachable
-            </label>
-          </div>
-          {!selectedNode ? <h3>{hoveredNode?.domain || "Details"}</h3> : null}
-          {selectedNode ? <div className="muted">Pinned selection</div> : null}
-          <div className="muted">
-            Type: {hoveredNode?.kind || "unknown"}
-            {hoveredNode?.root ? ` · Root: ${hoveredNode.root}` : ""}
-          </div>
-          {graphSourceOpen ? (
-            <div className="graph-source">
-              <div className="graph-source-head">
-                <div className="muted">Source</div>
-                <select
-                  value={graphSourceKey}
-                  onChange={(e) => setGraphSourceKey(e.target.value)}
-                >
-                  {graphSourceOptions.map((opt) => (
-                    <option key={opt.key} value={opt.key}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <pre className="code">
-                {graphSourcePayload ? JSON.stringify(graphSourcePayload, null, 2) : ""}
-              </pre>
-            </div>
-          ) : null}
-          {hoveredNode && (hoveredNode.kind === "hub" || hoveredNode.kind === "root") ? (
-            <div className="spoke-list">
-              <div className="muted">
-                Spokes ({(outgoing.get(hoveredNode.key) || []).length})
-              </div>
-              <div className="spoke-items">
-                {(outgoing.get(hoveredNode.key) || []).slice(0, 60).map((node) => (
-                  <button
-                    key={`spoke-${hoveredNode.key}-${node.key}`}
-                    className="ghost spoke-btn"
-                    onClick={() => focusNode(node)}
-                  >
-                    {node.domain}
-                  </button>
-                ))}
-                {(outgoing.get(hoveredNode.key) || []).length > 60 ? (
-                  <div className="muted">
-                    +{(outgoing.get(hoveredNode.key) || []).length - 60} more
-                  </div>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-          {hoveredNode?.kind === "hub" && dnsSummary ? (
-            <div className="graph-summary">
-              <div className="graph-record-row">
-                <span>Scanned domains</span>
-                <span>{dnsSummary.scanned_domains ?? 0}</span>
-              </div>
-              <div className="graph-record-row">
-                <span>Resolved domains</span>
-                <span>{dnsSummary.resolved_domains ?? 0}</span>
-              </div>
-              <div className="graph-record-row">
-                <span>Unique IPs</span>
-                <span>{dnsSummary.unique_ip_count ?? 0}</span>
-              </div>
-            </div>
-          ) : null}
-          {hoveredNode?.kind === "hub" && intelSummary ? (
-            <div className="graph-summary">
-              <div className="graph-record-row">
-                <span>Mail-enabled</span>
-                <span>{intelSummary.mail_enabled_domains ?? 0}</span>
-              </div>
-              <div className="graph-record-row">
-                <span>SPF</span>
-                <span>{intelSummary.spf_domains ?? 0}</span>
-              </div>
-              <div className="graph-record-row">
-                <span>DMARC</span>
-                <span>{intelSummary.dmarc_domains ?? 0}</span>
-              </div>
-              <div className="graph-record-row">
-                <span>IPv6 domains</span>
-                <span>{intelSummary.ipv6_domains ?? 0}</span>
-              </div>
-            </div>
-          ) : null}
-          {(hoveredNode?.kind === "hub" || hoveredNode?.kind === "root") && domainList.length ? (
-            <details className="graph-details" open>
-              <summary>
-                Discovered domains ({domainList.length}
-                {focusedRoot ? ` in ${focusedRoot}` : ""})
-              </summary>
-              <input
-                className="domain-filter"
-                placeholder="Filter domains..."
-                value={domainFilter}
-                onChange={(e) => setDomainFilter(e.target.value.toLowerCase())}
-              />
-              <div className="graph-domain-list">
-                {domainList.slice(0, 200).map((d) => (
-                  <div key={`dl-${d}`} className="graph-domain-item">
-                    {d}
+
+            {selRisk.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                {selRisk.map((f, i) => (
+                  <div key={i} style={{ fontSize: 12, padding: "5px 8px", marginBottom: 4, borderRadius: 4,
+                    background: (SEV[f.severity] || "var(--line)") + "22",
+                    borderLeft: "3px solid " + (SEV[f.severity] || "var(--line)") }}>
+                    <span style={{ fontWeight: 700, textTransform: "uppercase", fontSize: 10, marginRight: 6 }}>{f.severity}</span>
+                    {f.detail}
                   </div>
                 ))}
-                {domainList.length > 200 ? (
-                  <div className="muted">+{domainList.length - 200} more</div>
-                ) : null}
               </div>
-            </details>
-          ) : null}
-          {hoveredNode?.kind === "aggregate" ? (
-            <div className="muted">
-              {hoveredNode.count} domains hidden at this zoom level. Zoom in to expand.
+            )}
+
+            <div className="graph-kv">
+              <span>DNS Records</span>
+              <span>{selDns ? Object.entries(selDns).filter(([k,v])=>Array.isArray(v)&&v.length&&k!=="ips").reduce((s,[,v])=>s+v.length,0) : 0}</span>
             </div>
-          ) : null}
-          {hoveredNode?.kind === "domain" || hoveredNode?.kind === "root" ? (
-            <>
-              {nodeIntel ? (
-                <div className="graph-summary">
-                  <div className="graph-record-row">
-                    <span>Resolves</span>
-                    <span>{nodeIntel.resolves ? "yes" : "no"}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>Root</span>
-                    <span>{nodeIntel.root || "-"}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>Depth</span>
-                    <span>{nodeIntel.label_depth}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>MX / SPF / DMARC</span>
-                    <span>
-                      {nodeIntel.has_mx ? "MX" : "-"} / {nodeIntel.has_spf ? "SPF" : "-"} /{" "}
-                      {nodeIntel.has_dmarc ? "DMARC" : "-"}
-                    </span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>SPF records</span>
-                    <span>
-                      {nodeIntel.spf_txt_records ?? 0}
-                      {nodeIntel.spf_multiple ? " (multiple)" : ""}
-                    </span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>DMARC policy</span>
-                    <span>{nodeIntel.dmarc_policy || "-"}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>Email security score</span>
-                    <span>{nodeIntel.email_security_score ?? 0} / 10</span>
-                  </div>
-                  {mailProviders.length ? (
-                    <div className="graph-record-row">
-                      <span>Mail providers</span>
-                      <span>{mailProviders.join(", ")}</span>
-                    </div>
-                  ) : null}
-                  <div className="graph-record-row">
-                    <span>Dangling CNAME</span>
-                    <span>{nodeIntel.dangling_cname ? "possible" : "no"}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>Takeover risk</span>
-                    <span>{nodeIntel.takeover_risk ? "possible" : "no"}</span>
-                  </div>
-                  {nodeIntel.takeover_targets?.length ? (
-                    <div className="graph-record-row">
-                      <span>Takeover targets</span>
-                      <span>{nodeIntel.takeover_targets.join(", ")}</span>
-                    </div>
-                  ) : null}
-                  <div className="graph-record-row">
-                    <span>Surface class</span>
-                    <span>{nodeIntel.surface_class || "web"}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>Root wildcard</span>
-                    <span>{nodeIntel.root_wildcard ? "yes" : "no"}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>CDN / Proxy</span>
-                    <span>
-                      {edgeProvider?.provider
-                        ? `${edgeProvider.provider} (${edgeProvider.confidence || "low"})`
-                        : nodeIntel.web?.is_cdn_or_proxy
-                          ? nodeIntel.web?.cdn_or_proxy_provider || "yes"
-                          : "no"}
-                      {edgeProvider?.asn_provider
-                        ? ` · ASN: ${edgeProvider.asn_provider}`
-                        : ""}
-                    </span>
-                  </div>
-                  {edgeProvider?.signals?.length || edgeProvider?.asn_signals?.length ? (
-                    <details className="graph-details">
-                      <summary>Edge signals</summary>
-                      <div className="graph-chip-list">
-                        {(edgeProvider.signals || []).map((sig) => (
-                          <span key={`edge-sig-${hoveredNode.key}-${sig}`} className="graph-chip">
-                            {sig}
-                          </span>
-                        ))}
-                        {(edgeProvider.asn_signals || []).map((sig) => (
-                          <span
-                            key={`edge-asn-${hoveredNode.key}-${sig}`}
-                            className="graph-chip"
-                          >
-                            {sig}
-                          </span>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  <div className="graph-record-row">
-                    <span>HTTP</span>
-                    <span>
-                      {nodeIntel.web?.reachable
-                        ? `${nodeIntel.web?.scheme?.toUpperCase() || "HTTP"} ${nodeIntel.web?.status_code ?? ""}`.trim()
-                        : "unreachable"}
-                    </span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>Web Server</span>
-                    <span>
-                      {nodeIntel.web?.server_version_hint ||
-                        nodeIntel.web?.server_header ||
-                        "-"}
-                    </span>
-                  </div>
-                  {nodeIntel.web?.title ? (
-                    <div className="graph-record-row">
-                      <span>Title</span>
-                      <span>{nodeIntel.web.title}</span>
-                    </div>
-                  ) : null}
-                  {cloudStorage && cloudStorage.provider ? (
-                    <div className="graph-record-row">
-                      <span>Cloud storage</span>
-                      <span>
-                        {cloudStorage.provider}
-                        {cloudStorage.listing_detected ? " (listing)" : ""}
-                        {cloudStorage.error_hint ? ` (${cloudStorage.error_hint})` : ""}
-                      </span>
-                    </div>
-                  ) : null}
-                  {exposureScore !== null ? (
-                    <div className="graph-record-row">
-                      <span>Exposure score</span>
-                      <span>{exposureScore} / 10</span>
-                    </div>
-                  ) : null}
-                  {deepScan?.enabled ? (
-                    <details className="graph-details">
-                      <summary>Deep scan</summary>
-                      <div className="graph-records">
-                        <div className="graph-record-row">
-                          <span>favicon.ico</span>
-                          <span>
-                            {deepScan.favicon?.status_code ?? "-"}
-                            {deepScan.favicon?.response_ms !== undefined
-                              ? ` · ${deepScan.favicon.response_ms}ms`
-                              : ""}
-                          </span>
-                        </div>
-                        <div className="graph-record-row">
-                          <span>robots.txt</span>
-                          <span>
-                            {deepScan.robots?.status_code ?? "-"}
-                            {deepScan.robots?.response_ms !== undefined
-                              ? ` · ${deepScan.robots.response_ms}ms`
-                              : ""}
-                          </span>
-                        </div>
-                        <div className="graph-record-row">
-                          <span>sitemap.xml</span>
-                          <span>
-                            {deepScan.sitemap?.status_code ?? "-"}
-                            {deepScan.sitemap?.response_ms !== undefined
-                              ? ` · ${deepScan.sitemap.response_ms}ms`
-                              : ""}
-                          </span>
-                        </div>
-                        {deepScan.favicon?.hash_mmh3 ? (
-                          <div className="graph-record-row">
-                            <span>Favicon hash</span>
-                            <span>
-                              {deepScan.favicon.hash_mmh3}
-                              {deepScan.favicon.hash_fingerprint
-                                ? ` · ${deepScan.favicon.hash_fingerprint}`
-                                : ""}
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-                    </details>
-                  ) : null}
-                  {securityHeaderKeys.length ? (
-                    <details className="graph-details">
-                      <summary>Security headers</summary>
-                      <div className="graph-chip-list">
-                        {securityHeaderKeys.map((k) => (
-                          <span key={`sec-${hoveredNode.key}-${k}`} className="graph-chip">
-                            {k}
-                          </span>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  {hsts && hsts.header ? (
-                    <details className="graph-details">
-                      <summary>HSTS</summary>
-                      <div className="graph-record-row">
-                        <span>Max-age</span>
-                        <span>{hsts.max_age ?? "-"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>IncludeSubDomains</span>
-                        <span>{hsts.include_subdomains ? "yes" : "no"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Preload</span>
-                        <span>{hsts.preload_directive ? "yes" : "no"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Preload eligible</span>
-                        <span>{hsts.preload_eligible ? "yes" : "no"}</span>
-                      </div>
-                    </details>
-                  ) : null}
-                  {tls && (tls.protocol || tls.cert) ? (
-                    <details className="graph-details">
-                      <summary>TLS certificate</summary>
-                      <div className="graph-record-row">
-                        <span>Protocol</span>
-                        <span>{tls.protocol || "-"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Cipher</span>
-                        <span>{tls.cipher || "-"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Valid from</span>
-                        <span>{certNotBefore ? formatDate(certNotBefore) : "-"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Valid until</span>
-                        <span>{certNotAfter ? formatDate(certNotAfter) : "-"}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Issuer</span>
-                        <span>{formatCertEntity(tls.cert?.issuer)}</span>
-                      </div>
-                      <div className="graph-record-row">
-                        <span>Subject</span>
-                        <span>{formatCertEntity(tls.cert?.subject)}</span>
-                      </div>
-                      {tls.cert?.san?.length ? (
-                        <div className="graph-list-block">
-                          <div className="muted">SANs</div>
-                          <div className="graph-chip-list">
-                            {tls.cert.san.slice(0, 10).map((san) => (
-                              <span key={`san-${hoveredNode.key}-${san}`} className="graph-chip">
-                                {san}
-                              </span>
-                            ))}
-                            {tls.cert.san.length > 10 ? (
-                              <span className="muted">+{tls.cert.san.length - 10} more</span>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : null}
-                    </details>
-                  ) : null}
-                  {fingerprints.length || reportedVersions.length || technologies.length ? (
-                    <details className="graph-details">
-                      <summary>Fingerprints</summary>
-                      {fingerprints.length ? (
-                        <div className="graph-chip-list">
-                          {fingerprints.map((fp) => (
-                            <span key={`fp-${hoveredNode.key}-${fp}`} className="graph-chip">
-                              {fp}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {technologies.length ? (
-                        <div className="graph-list-block">
-                          <div className="muted">Technologies</div>
-                          <div className="graph-records">
-                            {technologies.map((entry, idx) => (
-                              <div
-                                key={`tech-${hoveredNode.key}-${idx}-${entry.name}`}
-                                className="graph-record-row"
-                              >
-                                <span>{entry.name}</span>
-                                <span className="muted">{entry.source}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                      {reportedVersions.length ? (
-                        <div className="graph-list-block">
-                          <div className="muted">Reported versions</div>
-                          <div className="graph-records">
-                            {reportedVersions.map((entry, idx) => (
-                              <div
-                                key={`rv-${hoveredNode.key}-${idx}-${entry.name}-${entry.version}`}
-                                className="graph-record-row"
-                              >
-                                <span>
-                                  {entry.name}
-                                  {entry.version ? ` ${entry.version}` : ""}
-                                </span>
-                                <span className="muted">{entry.source}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                    </details>
-                  ) : null}
-                  {exposureFactors.length ? (
-                    <details className="graph-details">
-                      <summary>Exposure factors</summary>
-                      <div className="graph-chip-list">
-                        {exposureFactors.map((factor) => (
-                          <span key={`exp-${hoveredNode.key}-${factor}`} className="graph-chip">
-                            {factor}
-                          </span>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  {visibleCveFindings.length ? (
-                    <details className="graph-details">
-                      <summary>CVE findings</summary>
-                      <div className="muted">
-                        Critical {cveCounts.Critical} · High {cveCounts.High} · Medium{" "}
-                        {cveCounts.Medium} · Low {cveCounts.Low} · Total{" "}
-                        {cveCounts.Total}
-                      </div>
-                      <div className="graph-records">
-                        {visibleCveFindings.map((row, idx) => (
-                          <div
-                            key={`cve-${hoveredNode.key}-${idx}-${row.cve}`}
-                            className="graph-record-row"
-                          >
-                            <span>
-                              {row.cve} · {row.component} {row.version}
-                            </span>
-                            <span className="muted">
-                              {classifySeverity(row.score)} · {row.score ?? "-"}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  {ipAsn.length ? (
-                    <details className="graph-details">
-                      <summary>ASN</summary>
-                      <div className="graph-records">
-                        {ipAsn.map((row) => (
-                          <div key={`asn-${hoveredNode.key}-${row.ip}`} className="graph-record-row">
-                            <span>{row.ip}</span>
-                            <span>
-                              {row.asn ? `AS${row.asn}` : "-"} {row.asn_description || ""}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  ) : null}
-                  {nodeIntel.provider_hints?.length ? (
-                    <div className="graph-list-block">
-                      <div className="muted">Provider hints</div>
-                      <div className="graph-chip-list">
-                        {nodeIntel.provider_hints.map((p) => (
-                          <span key={`hint-${hoveredNode.key}-${p}`} className="graph-chip">
-                            {p}
-                          </span>
-                        ))}
+            {selDns ? (
+              <div className="graph-records">
+                {["A","AAAA","CNAME","MX","NS","TXT","SOA","CAA"].map((k) => {
+                  const vals = selDns[k] || [];
+                  if (!vals.length) return null;
+                  return (
+                    <div key={k}>
+                      <div className="graph-record-row"><span>{k}</span><span>{vals.length}</span></div>
+                      <div className="graph-chip-list" style={{ paddingLeft: 10, marginBottom: 3 }}>
+                        {vals.slice(0,6).map((v) => <span key={v} className="graph-chip" style={{ fontSize: 11 }}>{v}</span>)}
+                        {vals.length > 6 && <span className="muted" style={{ fontSize: 11 }}>+{vals.length-6} more</span>}
                       </div>
                     </div>
-                  ) : null}
-                  {nodeIntel.service_hints?.length ? (
-                    <div className="graph-list-block">
-                      <div className="muted">Service hints</div>
-                      <div className="graph-chip-list">
-                        {nodeIntel.service_hints.map((p) => (
-                          <span key={`svc-${hoveredNode.key}-${p}`} className="graph-chip">
-                            {p}
-                          </span>
-                        ))}
-                      </div>
+                  );
+                })}
+                {selIps.length > 0 && (
+                  <div className="graph-list-block">
+                    <div className="muted">IPs</div>
+                    <div className="graph-chip-list">
+                      {selIps.slice(0,8).map((ip) => <span key={ip} className="graph-chip" style={{ fontSize: 11 }}>{ip}</span>)}
+                      {selIps.length > 8 && <span className="muted" style={{ fontSize: 11 }}>+{selIps.length-8} more</span>}
                     </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <div className="graph-kv">
-                <span>DNS Records</span>
-                <span>{hoveredNode.totalRecords || 0}</span>
+                  </div>
+                )}
               </div>
-              {hoveredNode?.dns ? (
-                <div className="graph-records">
-                  <div className="graph-record-row">
-                    <span>Resolved At</span>
-                    <span>{hoveredNode.dns.resolved_at ? formatDate(hoveredNode.dns.resolved_at) : "-"}</span>
+            ) : <div className="muted" style={{ fontSize: 12 }}>No DNS data for this domain.</div>}
+
+            {selIdb.length > 0 && (
+              <details className="graph-details" open>
+                <summary>Shodan InternetDB</summary>
+                {selIdb.map(({ ip, ports, vulns, tags, cpes }) => (
+                  <div key={ip} style={{ marginBottom: 8 }}>
+                    <div className="graph-record-row"><span>IP</span><span>{ip}</span></div>
+                    {ports?.length > 0 && <div className="graph-record-row"><span>Open ports</span><span style={{ fontSize: 11 }}>{ports.join(", ")}</span></div>}
+                    {vulns?.length > 0 && <div className="graph-list-block"><div className="muted" style={{ fontSize: 11 }}>CVEs</div>
+                      <div className="graph-chip-list">{vulns.map((v) => <span key={v} className="graph-chip" style={{ fontSize: 10, background: "rgba(201,61,47,0.18)" }}>{v}</span>)}</div></div>}
+                    {tags?.length > 0 && <div className="graph-chip-list">{tags.map((t) => <span key={t} className="graph-chip" style={{ fontSize: 11 }}>{t}</span>)}</div>}
+                    {cpes?.length > 0 && <div className="graph-list-block"><div className="muted" style={{ fontSize: 11 }}>CPEs</div>
+                      <div className="graph-chip-list">{cpes.slice(0,4).map((c) => <span key={c} className="graph-chip" style={{ fontSize: 10 }}>{c}</span>)}
+                      {cpes.length > 4 && <span className="muted" style={{ fontSize: 11 }}>+{cpes.length-4} more</span>}</div></div>}
                   </div>
-                  {["A", "AAAA", "CNAME", "MX", "NS"].map((k) => (
-                    <div key={k} className="graph-record-row">
-                      <span>{k}</span>
-                      <span>{(hoveredNode.dns[k] || []).length}</span>
-                    </div>
-                  ))}
-                  <div className="graph-record-row">
-                    <span>TXT</span>
-                    <span>{(hoveredNode.dns.TXT || []).length}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>CAA</span>
-                    <span>{(hoveredNode.dns.CAA || []).length}</span>
-                  </div>
-                  <div className="graph-record-row">
-                    <span>PTR names</span>
-                    <span>{ptrValues.length}</span>
-                  </div>
-                  {(hoveredNode.dns.ips || []).length ? (
-                    <div className="graph-list-block">
-                      <div className="muted">IPs</div>
-                      <div className="graph-chip-list">
-                        {hoveredNode.dns.ips.slice(0, 10).map((ip) => (
-                          <span key={`ip-${hoveredNode.key}-${ip}`} className="graph-chip">
-                            {ip}
-                          </span>
-                        ))}
-                        {hoveredNode.dns.ips.length > 10 ? (
-                          <span className="muted">+{hoveredNode.dns.ips.length - 10} more</span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                  {ptrValues.length ? (
-                    <div className="graph-list-block">
-                      <div className="muted">PTR</div>
-                      <div className="graph-chip-list">
-                        {ptrValues.slice(0, 8).map((ptr) => (
-                          <span key={`ptr-${hoveredNode.key}-${ptr}`} className="graph-chip">
-                            {ptr}
-                          </span>
-                        ))}
-                        {ptrValues.length > 8 ? (
-                          <span className="muted">+{ptrValues.length - 8} more</span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="muted">No DNS artifact for this node.</div>
-              )}
-            </>
-          ) : (
-            <div className="muted">
-              Center hub for the scan scope. Hover domains for details.
-            </div>
-          )}
-        </div>
+                ))}
+              </details>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 }
+
 
 export default function App() {
   const [allCompanies, setAllCompanies] = useState([]);
@@ -3261,6 +1935,7 @@ export default function App() {
                         });
                       }, 50);
                     }}
+                    onChangeViewMode={persistUiMode}
                   />
                 ) : null}
                 <section

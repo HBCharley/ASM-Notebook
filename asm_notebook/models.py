@@ -1,8 +1,12 @@
 from __future__ import annotations
+
 from datetime import datetime
-from sqlalchemy import String, Integer, DateTime, ForeignKey, Text, UniqueConstraint
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from .db import Base
+
 
 class Company(Base):
     __tablename__ = "companies"
@@ -12,8 +16,13 @@ class Company(Base):
     name: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    domains: Mapped[list["CompanyDomain"]] = relationship(back_populates="company", cascade="all, delete-orphan")
-    scans: Mapped[list["ScanRun"]] = relationship(back_populates="company", cascade="all, delete-orphan")
+    domains: Mapped[list["CompanyDomain"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+    scans: Mapped[list["ScanRun"]] = relationship(
+        back_populates="company", cascade="all, delete-orphan"
+    )
+
 
 class CompanyDomain(Base):
     __tablename__ = "company_domains"
@@ -25,6 +34,7 @@ class CompanyDomain(Base):
 
     company: Mapped["Company"] = relationship(back_populates="domains")
 
+
 class ScanRun(Base):
     __tablename__ = "scan_runs"
 
@@ -32,11 +42,14 @@ class ScanRun(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="running")  # running/success/failed
+    status: Mapped[str] = mapped_column(String(32), default="running")
     notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     company: Mapped["Company"] = relationship(back_populates="scans")
-    artifacts: Mapped[list["ScanArtifact"]] = relationship(back_populates="scan", cascade="all, delete-orphan")
+    artifacts: Mapped[list["ScanArtifact"]] = relationship(
+        back_populates="scan", cascade="all, delete-orphan"
+    )
+
 
 class ScanArtifact(Base):
     __tablename__ = "scan_artifacts"

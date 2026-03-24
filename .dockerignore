@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite3
+*.sqlite3-journal
+asm_notebook/frontend/node_modules/
+.git/
+.gitignore
+*.md
+deploy/

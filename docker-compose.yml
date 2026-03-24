@@ -1,0 +1,11 @@
+services:
+  asm:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - asm_data:/data
+    restart: unless-stopped
+
+volumes:
+  asm_data:
