@@ -221,14 +221,32 @@ Required env vars:
 
 ### Deploy Script + Rules
 
-This repo includes a production-minded deploy script:
+This repo includes production deploy scripts:
 
-- `scripts/deploy_production.ps1`
+- `scripts/deploy.sh` — bash script (preferred): build + deploy + smoke tests in one command
+- `scripts/deploy_production.ps1` — PowerShell equivalent
 
-Deploy rules:
+Deploy rules (used by both scripts):
 
-- `deploy/production.rules.example.json` (committed template)
-- `deploy/production.rules.json` (local overrides; gitignored)
+- `asm_notebook/deploy/production.rules.json` (local config; gitignored)
+- `asm_notebook/deploy/production.rules.example.json` (committed template)
+
+Quick deploy (bash):
+
+```bash
+bash scripts/deploy.sh --project <GCP_PROJECT_ID>
+bash scripts/deploy.sh --project <GCP_PROJECT_ID> --dry-run     # preview commands only
+bash scripts/deploy.sh --project <GCP_PROJECT_ID> --deploy-only # skip build, redeploy existing image
+bash scripts/deploy.sh --project <GCP_PROJECT_ID> --build-only  # build + push, skip deploy
+bash scripts/deploy.sh --project <GCP_PROJECT_ID> --skip-smoke  # skip post-deploy smoke tests
+```
+
+Smoke tests only:
+
+```bash
+bash scripts/smoke_test.sh                          # test production (reads domain from rules.json)
+bash scripts/smoke_test.sh http://localhost:8000    # test local
+```
 
 Cloud Run sizing can be configured via the `cloud_run` section (optional):
 
@@ -337,7 +355,32 @@ Security notes:
 
 Note: Neon sleeps inactive databases; the first request after idle may be slower.
 
-## Frontend
+## Local Development
+
+Start backend + frontend together (recommended):
+
+```bash
+bash scripts/start_dev.sh
+```
+
+Options:
+
+```bash
+bash scripts/start_dev.sh --backend   # backend only (port 8000)
+bash scripts/start_dev.sh --frontend  # frontend only (port 5173)
+ASM_DB_PATH=/path/to/db.sqlite3 bash scripts/start_dev.sh  # custom DB path
+BACKEND_PORT=8001 VITE_PORT=3000 bash scripts/start_dev.sh # custom ports
+```
+
+Or start manually:
+
+**Backend:**
+
+```powershell
+ASM_DATABASE_URL="<postgres-url>" uvicorn asm_notebook.api_main:app --reload
+```
+
+**Frontend:**
 
 ```powershell
 cd frontend
@@ -347,13 +390,13 @@ npm run dev -- --host 127.0.0.1 --port 5173
 
 Open:
 
-- `http://127.0.0.1:5173/`
+- Frontend: `http://127.0.0.1:5173/`
+- API docs: `http://127.0.0.1:8000/api/v1/docs`
 
 Notes:
 
 - The frontend uses a Vite proxy to the backend for API routes (`/api/v1` in `vite.config.js`).
 - Keep backend running on `127.0.0.1:8000` while using frontend dev mode.
-- API versioning: `/api/v1/*` routes are available.
 - Frontend can override the prefix with `VITE_API_PREFIX` (default `/api/v1`).
 - Google login uses `VITE_GOOGLE_CLIENT_ID` (must match backend `GOOGLE_OAUTH_CLIENT_ID`).
 
@@ -405,6 +448,62 @@ Notes:
     - `Manage users` opens the admin panel (including auth allowlist for Google login)
     - `Manage groups` opens a modal to create groups and assign companies
   - Standard users only see companies assigned to their group
+
+## SOC Analyst Workspace
+
+The SOC Analyst view (`/soc`) is a high-density investigation workspace. Select it from the view switcher.
+
+### Asset Inventory Table
+
+Columns: host, title, platform (DNS-detected provider), edge/CDN family, finding severity counts.
+
+Filters:
+- **Show unreachable** — include hosts that resolve but don't respond on HTTP/S (on by default)
+- **Changed only** — show only assets with scan-to-scan changes (disabled when no changes exist)
+- Severity toggles and category multi-select on the Findings panel
+
+### Asset Detail Drawer
+
+Click any asset row to open the detail drawer. Tabs:
+
+| Tab | Contents |
+|---|---|
+| **Overview** | Investigation summary, Platform & exposure (provider hints, WAF/CDN yes/no, technologies, fingerprints), Email security (SPF, DMARC policy, CAA records, score), quick findings |
+| **DNS** | A/AAAA IPs, CNAME, MX, NS, CAA records, raw DNS JSON |
+| **Web** | Final URL, status, response time, title, server, technologies, fingerprints, security headers, deep scan results |
+| **TLS** | Certificate dates, issuer, SAN list, HSTS, raw TLS JSON |
+| **Findings** | Full finding details: title, severity, category, explanation, remediation, evidence |
+| **History** | Change state, change flags, previous snapshot diff |
+| **Raw JSON** | Complete intel row from the scan artifact |
+
+### Findings Engine
+
+Findings are generated automatically after each scan. Rule categories and severities:
+
+| Rule key | Category | Severity | Trigger |
+|---|---|---|---|
+| `takeover.dangling_cname` | takeover | critical | CNAME target doesn't resolve |
+| `email.no_spf` | email | investigate | No SPF record on apex domain |
+| `email.multiple_spf` | email | investigate | Multiple SPF records (RFC 7208 violation) |
+| `email.no_dmarc` | email | investigate | No DMARC record on apex domain |
+| `email.dmarc_permissive` | email | watch | DMARC `p=none` (monitor-only, spoofed mail delivered) |
+| `dns.no_caa` | dns | watch | No CAA records — any CA can issue certs |
+| `dns.unresolved` | dns | investigate | No A/AAAA records resolved |
+| `web.unreachable` | web | watch | Resolves but not HTTP reachable |
+| `web.missing_security_headers` | web | watch/investigate | Missing CSP, X-Frame-Options, etc. |
+| `web.missing_hsts` | web | watch | TLS present but no HSTS header |
+| `web.favicon_fingerprint` | web | investigate | Favicon hash matches known product (Jenkins, Kibana, etc.) |
+| `tls.missing` | tls | investigate | HTTP-only, no TLS |
+| `tls.cert_expiring_soon` | tls | watch/investigate | Cert expires within 30 days |
+| `exposure.no_edge` | exposure | watch | Web-reachable apex with no CDN/WAF/edge detected |
+| `vuln.cve.*` | vuln | watch–critical | CVE matched against detected software version (CVSS-weighted) |
+| `change.new_asset` | change | info | Host not in previous scan |
+| `change.newly_unreachable` | change | investigate | Was reachable, now unreachable |
+| `change.final_url_changed` | change | watch | Redirect chain/final URL differs |
+| `change.title_changed` | change | info | Page title changed |
+| `change.technology_changed` | change | watch | Technology stack differs |
+
+Findings are stored in the `findings` table and keyed by `(company_id, scan_id, asset_hostname, rule_key)`. Re-running a scan replaces findings for that scan.
 
 ## CLI
 

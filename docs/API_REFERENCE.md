@@ -82,10 +82,82 @@ These endpoints shape scan artifacts into an investigation-focused model for the
   - Returns summary tiles, shaped asset inventory rows, and persisted findings for the selected scan.
   - Optional `?scan_id=...` (defaults to latest scan).
   - Supports ETag/`If-None-Match` revalidation (304).
+  - Response shape:
+    ```json
+    {
+      "scan": { "id": 12, "company_scan_number": 3, "status": "success", ... },
+      "previous_scan": { ... },
+      "summary": {
+        "assets_total": 26,
+        "assets_web_reachable": 7,
+        "assets_changed": 2,
+        "findings_by_severity": { "critical": 0, "investigate": 3, "watch": 5, "info": 2 }
+      },
+      "assets": [
+        {
+          "hostname": "example.com",
+          "root_domain": "example.com",
+          "asset_type": "apex",
+          "resolves": true,
+          "provider_hint": "cloudflare",
+          "edge_family": "cloudflare",
+          "web": { "reachable": true, "status_code": 200, "title": "...", "final_url": "..." },
+          "finding_counts": { "critical": 0, "investigate": 1, "watch": 2, "info": 0 },
+          "change": { "state": "changed", "flags": ["title_changed"] }
+        }
+      ],
+      "findings": [
+        {
+          "id": 42,
+          "asset_hostname": "example.com",
+          "severity": "investigate",
+          "category": "email",
+          "rule_key": "email.no_dmarc",
+          "title": "No DMARC record",
+          "explanation": "...",
+          "remediation": "...",
+          "evidence": { "has_spf": true, "has_dmarc": false }
+        }
+      ]
+    }
+    ```
+
 - `GET /companies/{slug}/soc/assets/{hostname}` (public/auth + company access)
-  - Returns the selected asset’s detail payload (overview/DNS/Web/TLS/findings/history/raw).
+  - Returns the selected asset’s full detail payload.
   - Optional `?scan_id=...` (defaults to latest scan).
   - Supports ETag/`If-None-Match` revalidation (304).
+  - Response shape:
+    ```json
+    {
+      "asset": {
+        "hostname": "example.com",
+        "root_domain": "example.com",
+        "asset_type": "apex",
+        "resolves": true,
+        "ip_count": 2,
+        "has_ipv4": true,
+        "has_ipv6": false,
+        "provider_hints": ["cloudflare"],
+        "edge_family": "cloudflare",
+        "web": {
+          "reachable": true,
+          "final_url": "https://example.com/",
+          "status_code": 200,
+          "title": "Example",
+          "tls_present": true,
+          "hsts": { "header": "max-age=31536000; includeSubDomains" },
+          "technologies": ["nextjs"],
+          "fingerprints": [],
+          "security_headers": { "content-security-policy": "default-src ‘self’", ... },
+          "tls": { "not_before": "...", "not_after": "...", "issuer": "...", "san": [...] }
+        },
+        "dns": { "A": [...], "AAAA": [...], "CNAME": [...], "MX": [...], "NS": [...], "CAA": [...], "ips": [...] },
+        "findings": [ { "id": 42, "severity": "investigate", "category": "email", ... } ],
+        "change": { "state": "changed", "flags": ["title_changed"], "previous": { ... } },
+        "raw": { ... }
+      }
+    }
+    ```
 
 ### Tasks
 
