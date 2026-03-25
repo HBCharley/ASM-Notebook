@@ -24,32 +24,41 @@ if [[ ! -f "$RULES" ]]; then
   exit 1
 fi
 
-# ── Parse rules ───────────────────────────────────────────────────────────────
-get() { python3 -c "import json,sys; d=json.load(open('$RULES')); print(d$1)" 2>/dev/null || echo ""; }
-
-SERVICE="$(get "['service']")"
-REGION="$(get "['region']")"
-DOMAIN="$(get "['published_domain']")"
-DOMAIN="${DOMAIN%/}"
-ARTIFACT_REPO="$(get "['artifact_repo']")"
-IMAGE_NAME="$(get "['image_name']")"
-IMAGE_TAG="$(get "['image_tag']")"
-VITE_CLIENT_ID="$(get "['vite_google_client_id']")"
-OAUTH_CLIENT_ID="$(get "['google_oauth_client_id']")"
-CORS_ORIGINS="$(get "['cors_origins']")"
-ADMIN_EMAILS="$(get "['admin_emails']")"
-TASKS_ENABLED="$(get "['tasks']['enabled']")"
-TASKS_QUEUE="$(get "['tasks']['queue']")"
-TASKS_DEADLINE="$(get "['tasks']['dispatch_deadline_seconds']")"
-MEMORY="$(get "['cloud_run']['memory']")"
-CPU="$(get "['cloud_run']['cpu']")"
-CONCURRENCY="$(get "['cloud_run']['concurrency']")"
-MIN_INSTANCES="$(get "['cloud_run']['min_instances']")"
-MAX_INSTANCES="$(get "['cloud_run']['max_instances']")"
-TIMEOUT="$(get "['cloud_run']['timeout_seconds']")"
-SCAN_MAX="$(get "['scan']['max_seconds']")"
-DB_SECRET="$(get "['secrets']['asm_database_url']")"
-TASKS_SECRET="$(get "['secrets']['asm_tasks_secret']")"
+# ── Parse rules (single Python call to avoid quoting issues) ──────────────────
+eval "$(python3 - "$RULES" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+t = d.get("tasks", {})
+cr = d.get("cloud_run", {})
+sc = d.get("scan", {})
+se = d.get("secrets", {})
+def sh(k, v):
+    if v is None: v = ""
+    print(f"{k}={json.dumps(str(v))}")
+sh("SERVICE", d.get("service"))
+sh("REGION",  d.get("region"))
+sh("DOMAIN",  d.get("published_domain", "").rstrip("/"))
+sh("ARTIFACT_REPO",  d.get("artifact_repo"))
+sh("IMAGE_NAME",     d.get("image_name"))
+sh("IMAGE_TAG",      d.get("image_tag"))
+sh("VITE_CLIENT_ID", d.get("vite_google_client_id"))
+sh("OAUTH_CLIENT_ID",d.get("google_oauth_client_id"))
+sh("CORS_ORIGINS",   d.get("cors_origins"))
+sh("ADMIN_EMAILS",   d.get("admin_emails"))
+sh("TASKS_ENABLED",  str(bool(t.get("enabled"))).lower())
+sh("TASKS_QUEUE",    t.get("queue"))
+sh("TASKS_DEADLINE", t.get("dispatch_deadline_seconds"))
+sh("MEMORY",         cr.get("memory"))
+sh("CPU",            cr.get("cpu"))
+sh("CONCURRENCY",    cr.get("concurrency"))
+sh("MIN_INSTANCES",  cr.get("min_instances"))
+sh("MAX_INSTANCES",  cr.get("max_instances"))
+sh("TIMEOUT",        cr.get("timeout_seconds", 3600))
+sh("SCAN_MAX",       sc.get("max_seconds", 3600))
+sh("DB_SECRET",      se.get("asm_database_url"))
+sh("TASKS_SECRET",   se.get("asm_tasks_secret"))
+PYEOF
+)"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 DRY_RUN=false
@@ -118,7 +127,7 @@ ENV_VARS+=",ASM_SCAN_RUNNING_STALE_SECONDS=300"
 ENV_VARS+=",ASM_SCAN_HEARTBEAT_SECONDS=10"
 ENV_VARS+=",ASM_SCAN_TAKEOVER_SECONDS=20"
 
-if [[ "$TASKS_ENABLED" == "True" ]]; then
+if [[ "$TASKS_ENABLED" == "true" ]]; then
   ENV_VARS+=",ENABLE_TASKS=1"
   ENV_VARS+=",ASM_TASKS_PROJECT=$GCLOUD_PROJECT"
   ENV_VARS+=",ASM_TASKS_LOCATION=$REGION"
@@ -128,7 +137,7 @@ if [[ "$TASKS_ENABLED" == "True" ]]; then
 fi
 
 SECRETS="ASM_DATABASE_URL=${DB_SECRET}:latest"
-if [[ "$TASKS_ENABLED" == "True" ]]; then
+if [[ "$TASKS_ENABLED" == "true" ]]; then
   SECRETS+=",ASM_TASKS_SECRET=${TASKS_SECRET}:latest"
 fi
 
