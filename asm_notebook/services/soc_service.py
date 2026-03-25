@@ -112,6 +112,12 @@ def _hsts_present(row: dict[str, Any]) -> bool:
 
 
 def _provider_hint(row: dict[str, Any]) -> str:
+    # Prefer DNS-derived provider hints (cloudflare, vercel, gcp, aws, etc.)
+    dns_hints = row.get("provider_hints") or []
+    if isinstance(dns_hints, list) and dns_hints:
+        return ", ".join(str(h) for h in dns_hints if h)
+
+    # Fall back to web technology / fingerprint signals
     web = row.get("web") or {}
     tech = web.get("technologies") or []
     fps = web.get("fingerprints") or []
