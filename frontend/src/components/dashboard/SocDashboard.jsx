@@ -9,6 +9,16 @@ function formatCount(value) {
   return value.toLocaleString();
 }
 
+function normalizeTech(t) {
+  if (typeof t === "string") return t;
+  if (t && typeof t === "object") {
+    const name = String(t.name || t.technology || t.key || "").trim();
+    const ver = String(t.version || "").trim();
+    return ver ? `${name} ${ver}` : name;
+  }
+  return String(t);
+}
+
 function safeJsonParse(text, fallback) {
   try {
     return JSON.parse(text);
@@ -881,7 +891,7 @@ export default function SocDashboard(props) {
                           ) ? "yes" : "no — direct origin"
                         }
                       />
-                      <KeyValue label="Technologies" value={(assetDetail.asset.web?.technologies || []).join(", ") || "—"} />
+                      <KeyValue label="Technologies" value={(assetDetail.asset.web?.technologies || []).map(normalizeTech).filter(Boolean).join(", ") || "—"} />
                       <KeyValue label="Fingerprints" value={(assetDetail.asset.web?.fingerprints || []).join(", ") || "—"} />
                     </div>
                   </DrawerSection>
@@ -984,7 +994,7 @@ export default function SocDashboard(props) {
                     <KeyValue label="Server" value={assetDetail.asset.web?.server_header} />
                     <KeyValue
                       label="Technologies"
-                      value={(assetDetail.asset.web?.technologies || []).join(", ")}
+                      value={(assetDetail.asset.web?.technologies || []).map(normalizeTech).filter(Boolean).join(", ")}
                     />
                     <KeyValue
                       label="Fingerprints"
