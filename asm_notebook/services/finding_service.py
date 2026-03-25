@@ -252,6 +252,164 @@ def generate_findings(
                     rule_key="web.sitemap_missing",
                 )
 
+        # ── Email security (apex domains only) ─────────────────────────────
+        is_apex = bool(row.get("is_apex"))
+        has_mx = bool(row.get("has_mx"))
+        has_spf = bool(row.get("has_spf"))
+        has_dmarc = bool(row.get("has_dmarc"))
+        dmarc_policy = str(row.get("dmarc_policy") or "").lower()
+        spf_multiple = bool(row.get("spf_multiple"))
+
+        if is_apex:
+            if not has_spf:
+                add(
+                    severity="investigate",
+                    category="email",
+                    title="No SPF record",
+                    explanation=(
+                        "No SPF TXT record was found on this apex domain. Without SPF, any mail server "
+                        "can send email that appears to come from this domain, making phishing and spoofing trivially easy."
+                    ),
+                    evidence={"has_mx": has_mx, "has_spf": False},
+                    remediation=(
+                        "Publish a SPF TXT record on the apex domain (e.g. 'v=spf1 include:yourmailprovider.com -all'). "
+                        "Use '-all' (hard fail) rather than '~all' for maximum protection."
+                    ),
+                    rule_key="email.no_spf",
+                )
+
+            if spf_multiple:
+                add(
+                    severity="investigate",
+                    category="email",
+                    title="Multiple SPF records (RFC violation)",
+                    explanation=(
+                        "More than one SPF TXT record was found on this domain. RFC 7208 requires exactly one SPF record; "
+                        "multiple records cause SPF evaluation to fail (PermError), which means legitimate mail may be rejected "
+                        "and spam filters treat the domain as misconfigured."
+                    ),
+                    evidence={"spf_txt_records": int(row.get("spf_txt_records") or 0)},
+                    remediation=(
+                        "Merge all SPF mechanisms into a single 'v=spf1 ... -all' TXT record and remove the duplicates."
+                    ),
+                    rule_key="email.multiple_spf",
+                )
+
+            if not has_dmarc:
+                add(
+                    severity="investigate",
+                    category="email",
+                    title="No DMARC record",
+                    explanation=(
+                        "No DMARC TXT record was found at '_dmarc.<domain>'. Without DMARC, receiving mail servers "
+                        "have no policy to follow when SPF/DKIM checks fail, so spoofed email is typically delivered. "
+                        "DMARC also provides aggregate reports that let you monitor who is sending as your domain."
+                    ),
+                    evidence={"has_spf": has_spf, "has_dmarc": False},
+                    remediation=(
+                        "Publish a DMARC record at '_dmarc.<domain>' — start with 'p=none' to monitor, "
+                        "then progress to 'p=quarantine' and 'p=reject' once you have visibility into legitimate mail flows."
+                    ),
+                    rule_key="email.no_dmarc",
+                )
+            elif dmarc_policy == "none":
+                add(
+                    severity="watch",
+                    category="email",
+                    title="DMARC policy is 'none' (monitor only)",
+                    explanation=(
+                        "A DMARC record exists but the policy is 'p=none', which means spoofed emails are still delivered "
+                        "to recipients — the record only generates reports. This is appropriate while collecting data, "
+                        "but should be tightened to 'quarantine' or 'reject'."
+                    ),
+                    evidence={"dmarc_policy": dmarc_policy},
+                    remediation=(
+                        "Review your DMARC aggregate reports (rua=) to identify all legitimate sending sources, "
+                        "then advance the policy to 'p=quarantine' and eventually 'p=reject'."
+                    ),
+                    rule_key="email.dmarc_permissive",
+                )
+
+            # ── CAA records ─────────────────────────────────────────────────
+            if not row.get("has_caa") and resolves:
+                add(
+                    severity="watch",
+                    category="dns",
+                    title="No CAA records — any CA can issue certificates",
+                    explanation=(
+                        "No CAA (Certificate Authority Authorization) records were found. Without CAA, any trusted "
+                        "certificate authority can issue a TLS certificate for this domain. A misconfigured or compromised "
+                        "CA could issue certificates that enable MitM attacks."
+                    ),
+                    evidence={"has_caa": False, "domain": domain},
+                    remediation=(
+                        "Add CAA records restricting certificate issuance to the CAs you actually use "
+                        "(e.g. '0 issue \"letsencrypt.org\"'). Most cloud and CDN providers support CAA; "
+                        "check your DNS provider's documentation."
+                    ),
+                    rule_key="dns.no_caa",
+                )
+
+        # ── No edge/WAF protection ──────────────────────────────────────────
+        EDGE_PROVIDERS = frozenset({
+            "cloudflare", "akamai", "fastly", "vercel", "netlify",
+            "aws", "azure", "gcp", "github-pages",
+        })
+        provider_hints = set(row.get("provider_hints") or [])
+        has_edge = bool(provider_hints & EDGE_PROVIDERS)
+        if web_reachable and not has_edge and is_apex:
+            add(
+                severity="watch",
+                category="exposure",
+                title="No CDN or WAF edge detected — direct origin exposure",
+                explanation=(
+                    "This domain appears to serve traffic directly from the origin server with no detectable CDN, "
+                    "WAF, or edge proxy in front of it. Direct-origin exposure increases the attack surface: "
+                    "the real IP is visible, DDoS protection depends solely on the host, and web-layer attacks "
+                    "reach the application directly."
+                ),
+                evidence={"provider_hints": sorted(provider_hints), "final_url": final_url},
+                remediation=(
+                    "Consider placing a CDN/WAF (Cloudflare, AWS CloudFront + WAF, Fastly, etc.) in front of the origin. "
+                    "At minimum, ensure a cloud firewall restricts inbound HTTP/S to known IPs only."
+                ),
+                rule_key="exposure.no_edge",
+            )
+
+        # ── CVE findings (from version fingerprinting) ──────────────────────
+        cve_findings = row.get("cve_findings") or []
+        for cve in cve_findings:
+            cve_id = str(cve.get("cve_id") or "").strip()
+            if not cve_id:
+                continue
+            cvss = cve.get("cvss_score")
+            severity = "critical" if (cvss and float(cvss) >= 9.0) else \
+                       "investigate" if (cvss and float(cvss) >= 7.0) else "watch"
+            product = str(cve.get("product") or cve.get("software") or "")
+            version = str(cve.get("version") or "")
+            add(
+                severity=severity,
+                category="vuln",
+                title=f"Known CVE detected: {cve_id}" + (f" ({product} {version})".strip() if product else ""),
+                explanation=(
+                    f"Software version fingerprinting matched {cve_id}"
+                    + (f" against {product} {version}".strip() if product else "")
+                    + f". CVSS score: {cvss}." if cvss else "."
+                ),
+                evidence={
+                    "cve_id": cve_id,
+                    "product": product,
+                    "version": version,
+                    "cvss_score": cvss,
+                    "description": str(cve.get("description") or "")[:400],
+                },
+                remediation=(
+                    f"Update {product} to a patched version. Review the CVE advisory for workarounds "
+                    "if an upgrade is not immediately possible."
+                ),
+                rule_key=f"vuln.cve.{cve_id.lower().replace('-', '_')}",
+            )
+
         if prev_intel_rows is not None:
             was_present = domain in prev_by_domain
             if not was_present:

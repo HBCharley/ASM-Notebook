@@ -863,6 +863,57 @@ export default function SocDashboard(props) {
                       />
                     </div>
                   </DrawerSection>
+                  <DrawerSection title="Platform & exposure">
+                    <div className="soc2-kv-grid">
+                      <KeyValue
+                        label="Provider / edge"
+                        value={
+                          (assetDetail.asset.provider_hints || []).length
+                            ? assetDetail.asset.provider_hints.join(", ")
+                            : assetDetail.asset.edge_family || "none detected"
+                        }
+                      />
+                      <KeyValue
+                        label="WAF / CDN"
+                        value={
+                          (assetDetail.asset.provider_hints || []).some((p) =>
+                            ["cloudflare","akamai","fastly","vercel","netlify","aws","azure","gcp"].includes(p)
+                          ) ? "yes" : "no — direct origin"
+                        }
+                      />
+                      <KeyValue label="Technologies" value={(assetDetail.asset.web?.technologies || []).join(", ") || "—"} />
+                      <KeyValue label="Fingerprints" value={(assetDetail.asset.web?.fingerprints || []).join(", ") || "—"} />
+                    </div>
+                  </DrawerSection>
+                  <DrawerSection title="Email security">
+                    {(() => {
+                      const raw = assetDetail.asset.raw || {};
+                      const hasMx = raw.has_mx;
+                      const hasSpf = raw.has_spf;
+                      const spfMultiple = raw.spf_multiple;
+                      const hasDmarc = raw.has_dmarc;
+                      const dmarcPolicy = raw.dmarc_policy || "";
+                      const hasCaa = raw.has_caa;
+                      const score = raw.email_security_score;
+                      return (
+                        <div className="soc2-kv-grid">
+                          <KeyValue label="MX (mail enabled)" value={hasMx ? "yes" : "no"} />
+                          <KeyValue
+                            label="SPF"
+                            value={hasSpf ? (spfMultiple ? "⚠ multiple records" : "yes") : "missing"}
+                          />
+                          <KeyValue
+                            label="DMARC"
+                            value={hasDmarc ? (dmarcPolicy ? `p=${dmarcPolicy}` : "yes") : "missing"}
+                          />
+                          <KeyValue label="CAA records" value={hasCaa ? "yes" : "none"} />
+                          {score !== undefined ? (
+                            <KeyValue label="Email security score" value={score} />
+                          ) : null}
+                        </div>
+                      );
+                    })()}
+                  </DrawerSection>
                   <DrawerSection title="Quick findings">
                     {(assetDetail.asset.findings || []).slice(0, 8).map((f) => (
                       <div
